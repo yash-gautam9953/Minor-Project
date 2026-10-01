@@ -25,6 +25,8 @@
 *.pem
 /screenshots/
 *.zip
+/AGENTS.md
+/CLAUDE.md
 
 # debug
 npm-debug.log*
