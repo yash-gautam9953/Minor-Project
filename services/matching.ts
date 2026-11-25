@@ -16,12 +16,12 @@ export interface ProduceMatch {
 }
 
 export function distanceBetween(first: string, second: string): number {
-  return cityDistance[first]?.[second] ?? 18;
+  return cityDistance[first]?.[second] ?? Number.POSITIVE_INFINITY;
 }
 
 export function findDemandMatches(produce: ProduceListing, demands: DemandListing[]): ProduceMatch[] {
   return demands
-    .filter((demand) => demand.status === "open" && demand.quantityKg > 0 && produce.quantityKg > 0 && demand.produce.toLowerCase() === produce.produce.toLowerCase())
+    .filter((demand) => produce.status === "open" && demand.status === "open" && demand.quantityKg > 0 && produce.quantityKg > 0 && demand.produce.toLowerCase() === produce.produce.toLowerCase())
     .map((demand) => {
       const distanceKm = distanceBetween(produce.location, demand.location);
       const quantityMatchedKg = Math.min(produce.quantityKg, demand.quantityKg);
@@ -39,7 +39,7 @@ export function findDemandMatches(produce: ProduceListing, demands: DemandListin
 
 export function findFarmerMatches(demand: DemandListing, produce: ProduceListing[]) {
   return produce
-    .filter((listing) => listing.status === "open" && listing.quantityKg > 0 && demand.quantityKg > 0 && listing.produce.toLowerCase() === demand.produce.toLowerCase())
+    .filter((listing) => demand.status === "open" && listing.status === "open" && listing.quantityKg > 0 && demand.quantityKg > 0 && listing.produce.toLowerCase() === demand.produce.toLowerCase())
     .map((listing) => ({
       produce: listing,
       distanceKm: distanceBetween(demand.location, listing.location),

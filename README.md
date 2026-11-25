@@ -1,37 +1,132 @@
-## KhetLink
+# KhetLink
 
 KhetLink is a Next.js MVP for matching nearby farmers with restaurants, retailers, hostels and other bulk buyers. Farmers list produce, buyers post demand, the matching service compares crop, quantity, price and distance, and either side can accept a direct deal.
 
-The MVP also includes price transparency, an OpenStreetMap discovery view, a mock impact dashboard and optional Appwrite integration.
+The MVP also includes price transparency, an OpenStreetMap discovery view, a mock impact dashboard and an Appwrite-backed farmer-to-buyer workflow.
 
 ## Prerequisites
 
 - Node.js 20 or newer
 - npm
-- Git, if you want to push the project to GitHub
-The MVP works without Appwrite. If no Appwrite variables are configured, it uses the local demo fallback.
+- Git for GitHub collaboration
+- Chrome or Edge for browser testing
 
-1. Copy the environment template:
+## Run locally
 
-	```powershell
-	Copy-Item .env.example .env.local
-	```
+From the project folder:
 
-2. Fill in `.env.local` using the variables listed in `.env.example`.
-3. In Appwrite, create collections for `users`, `farmers`, `buyers`, `produce`, `demands`, `matches`, `orders`, and optionally `price_history`.
-4. Add attributes matching the interfaces in `types/index.ts` and configure read/write permissions.
-5. Restart `npm run dev` after changing `.env.local`.
+```powershell
+npm install
+npm run dev
+```
 
-Appwrite credentials must not be committed to GitHub. A failed Appwrite write does not block the local demo, but the current screens still use browser state as the source of truth.
+Open [http://localhost:3000](http://localhost:3000). Stop the development server with `Ctrl+C`.
 
-## Validate before sharing or deploying
+## Demo login (local mode)
+
+1. Open [http://localhost:3000/login](http://localhost:3000/login).
+2. Under **Or explore the demo**, choose:
+   - **Try farmer**: Ravi Kumar and the farmer workspace.
+   - **Try buyer**: Green Table Kitchen and the buyer workspace.
+   - **Try admin**: the platform impact view.
+3. No email or password is required for demo buttons.
+
+When Appwrite is not configured, demo state is stored in this browser. To reset it, clear site data for `localhost:3000` and reload. Demo accounts are hidden when Appwrite is configured.
+
+## Farmer demo flow
+
+1. Choose **Try farmer**.
+2. Open **My produce**.
+3. Add `Tomato`, `500` kg, `₹25/kg`, location `Greater Noida`.
+4. Click **Publish produce listing**.
+5. Open **Nearby demand** or **My matches**.
+6. Select a compatible buyer request and click **Accept this deal**.
+7. Open **Orders & deals** and verify `confirmed` status.
+8. Open **Earnings** and verify the confirmed value and traded quantity.
+
+The seeded demo normally includes a 300 kg Tomato demand from Green Table Kitchen. At ₹25/kg, its potential value is ₹7,500.
+
+## Buyer demo flow
+
+1. Return to `/login` or use **Sign out**.
+2. Choose **Try buyer**.
+3. Open **My demands**.
+4. Create a demand for `Tomato`, `300` kg, target price `₹29/kg`, delivery location `Greater Noida`.
+5. Click **Post buyer demand**.
+6. Open **Find farmers**.
+7. Verify that farmer matches show quantity, price, distance and deal value.
+8. Click **Accept farmer**.
+9. Open **Orders & deals** and verify the confirmed order.
+
+## Shared pages
+
+- **Price transparency**: illustrative farmer, market and retail references.
+- **Platform impact**: illustrative platform metrics and charts.
+- **Local discovery**: buyer demand, available produce and the OpenStreetMap map at `/marketplace`.
+- **Mobile view**: test the workspace, forms, tables and map at phone width.
+
+All prices, distances, listings, charts and impact values are illustrative demo data. They are not live mandi prices, live market quotations or guaranteed outcomes.
+
+## State and persistence
+
+- Without Appwrite, the demo uses localStorage key `kisan-connect-demo-v1` and sample data from `services/mock-data.ts`.
+- With Appwrite, user profiles, listings, demands, matches and orders are stored in the configured Appwrite database and shared across accounts.
+- Appwrite account sessions are managed by Appwrite; farmer and buyer workflows require a signed-in account. Admin access is restricted to account IDs in a server-only allowlist.
+
+## Appwrite backend setup
+
+1. Create an Appwrite project and add a Web platform for your local URL (for example `localhost`) and deployed hostname.
+2. Copy the environment template:
+
+   ```powershell
+   Copy-Item .env.example .env.local
+   ```
+
+3. In `.env.local`, set `NEXT_PUBLIC_APPWRITE_ENDPOINT` and `NEXT_PUBLIC_APPWRITE_PROJECT_ID`. Create an Appwrite API key with these scopes and set it as `APPWRITE_API_KEY`:
+
+   - `databases.read`, `databases.write`
+   - `collections.read`, `collections.write`
+   - `attributes.read`, `attributes.write`
+   - `documents.read`, `documents.write`
+
+   The provisioning script needs database, collection and attribute scopes to create the schema. The running app needs document scopes to load and update listings, demands, orders and account status. Leave the database and collection IDs blank for the default names, or fill them with IDs of existing resources.
+4. Run the provisioning script:
+
+   ```powershell
+   npm run appwrite:setup
+   ```
+
+   It creates or reuses the `khetlink` database, the `users`, `farmers`, `buyers`, `produce`, `demands`, `matches` and `orders` collections, and all required attributes (including optional `users.accountStatus` for admin account management). It writes the resulting IDs back into `.env.local`. It is safe to rerun: existing matching resources are reused; incompatible attributes cause a clear error instead of being replaced. The collections are created without public permissions and with document security enabled.
+
+5. Keep `APPWRITE_API_KEY` server-only. Do not prefix it or database/collection IDs with `NEXT_PUBLIC_`, commit `.env.local`, or share the key. The Next.js API route uses the key server-side and checks the signed-in account and role before writing.
+6. Enable Email/Password authentication in Appwrite Auth settings. For the first test, do not require email verification; this MVP does not send verification emails.
+7. For admin access, create a separate Appwrite Auth account (do not register it as a farmer/buyer), copy its Appwrite user ID, and place that ID in the server-only `APPWRITE_ADMIN_USER_IDS` variable. Multiple IDs can be comma-separated. Do not expose this allowlist with a `NEXT_PUBLIC_` prefix. The allowlisted account signs in through `/login` and is routed to `/admin/dashboard`; a client-selected role cannot grant admin access.
+8. Restart `npm run dev`.
+
+Register one farmer and one buyer using separate accounts (or separate browser profiles), publish a produce listing and a compatible demand, then accept the match. Accepting a match reads and updates the records inside one Appwrite transaction, creates a deterministic match record to prevent duplicate acceptance, updates both remaining quantities, and creates the order. The admin can view registered KhetLink users, listings, demands and orders, disable/enable farmer or buyer access to KhetLink, and close open listings. Disabling a KhetLink profile does not delete its Appwrite Auth account. API/configuration errors are shown in the UI; configured Appwrite mode does not silently switch to browser-local demo data.
+
+The required collections and attributes are verified against the existing Appwrite database by `npm run appwrite:setup`; collections are private with document security enabled. The current demo reads whole collections and has no required indexes. Do not grant public collection permissions. The app uses Appwrite's server transaction support; concurrent changes conflict rather than overselling.
+
+### Live demonstration checklist
+
+1. Register Farmer A and Buyer B in separate browser profiles.
+2. Farmer A lists 500 kg of Potato at ₹15/kg; Buyer B requests 300 kg at up to ₹18/kg.
+3. Confirm Potato appears in both match views, then accept the opportunity from either account.
+4. Verify the listing has 200 kg remaining, the demand is fulfilled, and the 300 kg order appears for both accounts.
+5. Mark the order completed and confirm the status refreshes for both users.
+6. Try an incompatible crop or a target price below the asking price; no match should appear.
+7. Sign in as a non-admin and visit `/admin/dashboard`; it must redirect to that account's own workspace. Test admin login with an ID explicitly configured in `APPWRITE_ADMIN_USER_IDS`.
+
+The source does not contain test credentials, so the real two-account flow must be exercised with separate accounts you create in Appwrite. `npm test` runs focused matching-rule tests; it does not replace the live account-to-order demonstration above. Do not create throwaway Appwrite Auth users for automated tests unless the API key has the `users.write` scope needed to delete those accounts afterward.
+
+## Validate before sharing
 
 ```powershell
 npm run lint
 npm run build
 ```
 
-To test the production build locally:
+Test the production build locally with:
 
 ```powershell
 npm start
@@ -39,42 +134,42 @@ npm start
 
 ## Push to GitHub
 
-If the project is not yet connected to GitHub:
+For a new GitHub repository:
 
 ```powershell
 git init
-
-From the project folder:
-
-```powershell
-npm install
+git add .
+git commit -m "Initial KhetLink MVP"
+git branch -M main
+git remote add origin https://github.com/<username>/<repository>.git
+git push -u origin main
 ```
 
 For later changes:
 
 ```powershell
-npm run dev
+git status
+git add .
+git commit -m "Describe the change"
+git push
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
-```
-
-The `.gitignore` excludes `node_modules`, `.next`, local environment files, TypeScript cache files, screenshots and zip archives. `.env.example` remains trackable and can be shared with the team.
+The `.gitignore` excludes dependencies, build output, local environment files, caches, screenshots and zip archives. `.env.example` remains trackable.
 
 ## Deploy on Vercel
 
-### Vercel dashboard
+### Dashboard
 
-1. Push the project to GitHub.
+1. Push the repository to GitHub.
 2. Open [vercel.com](https://vercel.com) and sign in with GitHub.
-3. Click **Add New Project** and import the KhetLink repository.
+3. Click **Add New Project** and import the repository.
 4. Keep the detected framework as **Next.js**.
-5. Use `npm run build` as the build command if Vercel asks for it.
-6. If Appwrite is enabled, add the same variables from `.env.local` under **Project Settings → Environment Variables**.
+5. Use `npm run build` if Vercel asks for a build command.
+6. Add all `.env.example` variables under **Project Settings → Environment Variables**. Keep `APPWRITE_API_KEY` as a server-only variable, without the `NEXT_PUBLIC_` prefix.
 7. Click **Deploy**.
-8. Open the generated Vercel URL and test `/login`, the farmer flow, the buyer flow and `/marketplace`.
+8. Test `/login`, both demo flows, `/price-transparency`, `/impact` and `/marketplace` on the deployed URL.
 
-### Vercel CLI
+### CLI
 
 ```powershell
 npm install -g vercel
@@ -83,86 +178,26 @@ vercel
 vercel --prod
 ```
 
-Do not upload `.env.local` or put secrets in source files. Add environment variables through Vercel project settings.
-
 ## Project structure
 
 - `app/`: Next.js App Router entry points and global styles
-- `components/platform-app.tsx`: main role-based product experience
+- `components/platform-app.tsx`: role-based product experience
 - `components/demand-map.tsx`: OpenStreetMap and Leaflet map
 - `components/ui/`: reusable UI components
-1. Open [http://localhost:3000/login](http://localhost:3000/login).
-- `services/mock-data.ts`: seeded NCR listings, demands and chart data
+- `app/api/platform/route.ts`: authenticated Appwrite backend API
+- `lib/appwrite.ts`: browser account authentication and API client
+- `lib/appwrite-server.ts`: server-only Appwrite data access and validation
+- `scripts/setup-appwrite.mjs`: idempotent database/collection/attribute provisioning
+- `services/mock-data.ts`: seeded listings, demands and chart data
 - `services/matching.ts`: crop, quantity, price and distance matching
-- `services/price-recommendation.ts`: deterministic price recommendation service
-	- **Try admin**: the platform impact view.
-3. No email address or password is required for the demo buttons.
+- `services/price-recommendation.ts`: deterministic price recommendation
+- `services/platform-store.tsx`: Appwrite-backed state, with local demo fallback when unconfigured
+- `tests/`: focused matching and API workflow tests
+- `types/index.ts`: entity and service contracts
 
 ## Known MVP limitations
 
 - Prices and impact metrics are illustrative, not live market data.
-- Appwrite reads are not the source for populating the platform screens.
-- Deal status is stored locally in the browser.
+- The Appwrite backend and account flow require the collections and server environment variables above to be configured.
 - There is no payment gateway, delivery tracking or transport workflow.
-- There are no route authorization guards; this is a presentation prototype.
-
-## Complete farmer demo
-
-1. Log in with **Try farmer**.
-2. Open **My produce**.
-3. In **Add available produce**, select Tomato, 500 kg, ₹25/kg and Greater Noida.
-4. Click **Publish produce listing** and confirm it appears in **Current listings**.
-5. Open **Nearby demand** or **My matches**.
-6. Show the nearby Tomato demand and calculated potential deal value.
-7. Click **Accept this deal** for a buyer request.
-8. Open **Orders & deals** and verify the order status is `confirmed`.
-9. Open **Earnings** and verify the confirmed deal value and traded quantity.
-
-The seeded demo normally shows Green Table Kitchen requesting 300 kg Tomato. At ₹25/kg, the deal value is ₹7,500.
-
-## Complete buyer demo
-
-1. Return to `/login` or use **Sign out** and log in with **Try buyer**.
-2. Open **My demands**.
-3. Create a demand with Tomato, 300 kg, target price ₹29/kg and delivery location Greater Noida.
-4. Click **Post buyer demand**.
-5. Open **Find farmers** when the app navigates there.
-6. Verify that matching farmers appear with quantity, price, distance and deal value.
-7. Click **Accept farmer**.
-8. Open **Orders & deals** and verify that the confirmed order appears.
-
-## Shared pages to demonstrate
-
-- **Price transparency**: illustrative farmer, market and retail price references.
-- **Platform impact**: illustrative farmers, buyers, deals, produce volume and farmer benefit metrics.
-- **Local discovery**: buyer demand, available produce and the OpenStreetMap map. The map is embedded in `/marketplace`; `/map` is not a separate route.
-- **Mobile view**: resize the browser to a phone width and confirm the workspace, forms, tables and map remain usable.
-
-All prices, listings, distances, charts and impact figures are demo estimates. They are not live mandi prices, live market quotes or guaranteed farmer outcomes.
-
-## State and persistence
-
-- Demo state is saved in browser localStorage under `kisan-connect-demo-v1`.
-- Added produce, posted demands, accepted deals and order status survive a refresh in the same browser.
-- Data is local to the browser and is not shared with other team members.
-- The initial state is seeded from `services/mock-data.ts`.
-- Clear browser site data to reset the local demo.
-
-## Appwrite
-
-Copy `.env.example` to `.env.local` and set the public endpoint, project ID, database ID, and collection IDs. Authentication uses Appwrite email/password sessions when configured. User, farmer, buyer, produce, demand, match and order writes use the Appwrite database adapter. Missing configuration or a failed write leaves the local demo usable; local demo state remains the source for the prototype screens.
-
-Create collections for `users`, `farmers`, `buyers`, `produce`, `demands`, `matches`, `orders`, and optionally `price_history`. Define attributes matching the entity interfaces in `types/index.ts`. Add an `id` string attribute if local identifiers should be stored in each document. Set read/write permissions for the intended participants. Appwrite schemas and permissions are configured in the Appwrite Console; this MVP does not provision them.
-
-## Structure
-
-- `app/`: Next.js App Router entry points and global theme
-- `components/`: shared app experience, map and UI primitives
-- `lib/appwrite.ts`: optional Appwrite authentication/database adapter
-- `services/mock-data.ts`: NCR demo listings and chart data
-- `services/matching.ts`: deterministic crop, price and distance matching
-- `services/price-recommendation.ts`: replaceable deterministic pricing service
-- `services/platform-store.tsx`: browser-persisted demo state and deal actions
-- `types/index.ts`: entity and service contracts
-
-The pricing service is an isolated async module so it can later call a FastAPI/ML endpoint without changing the screens.
+- Platform impact and price history remain illustrative; admin access and user/listing management require the server-side allowlist and API-key user scopes.

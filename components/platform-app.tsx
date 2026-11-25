@@ -4,7 +4,7 @@ import dynamic from "next/dynamic";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   ArrowRight,
   BarChart3,
@@ -41,7 +41,9 @@ import { toast } from "sonner";
 import {
   appwriteConfigured,
   createAppwriteAccount,
+  createPlatformProfile,
   createAppwriteSession,
+  loadPlatformState,
 } from "@/lib/appwrite";
 import { Button as UiButton } from "@/components/ui/button";
 import { usePlatform } from "@/services/platform-store";
@@ -74,6 +76,12 @@ const dayLabel = (value: string) =>
     day: "numeric",
     month: "short",
   });
+const dateInputValue = (offset: number) => {
+  const date = new Date();
+  date.setDate(date.getDate() + offset);
+  date.setMinutes(date.getMinutes() - date.getTimezoneOffset());
+  return date.toISOString().slice(0, 10);
+};
 
 function Button({
   children,
@@ -214,6 +222,9 @@ const commonNav = [
   ["Price transparency", "/price-transparency", BarChart3],
   ["Platform impact", "/impact", TrendingUp],
 ] as const;
+const adminNav = [
+  ["Admin dashboard", "/admin/dashboard", Users],
+] as const;
 
 function Workspace({
   route,
@@ -225,10 +236,11 @@ function Workspace({
   route: string;
   role: UserRole;
   name: string;
-  signOut: () => void;
+  signOut: () => Promise<void>;
   children: ReactNode;
 }) {
-  const links = role === "buyer" ? buyerNav : farmerNav;
+  const links =
+    role === "admin" ? adminNav : role === "buyer" ? buyerNav : farmerNav;
   const sideLink = ([label, href, Icon]: readonly [
     string,
     string,
@@ -267,7 +279,13 @@ function Workspace({
             <button
               title="Sign out"
               aria-label="Sign out"
-              onClick={signOut}
+              onClick={async () => {
+                try {
+                  await signOut();
+                } catch (error) {
+                  toast.error(error instanceof Error ? error.message : "Could not sign out.");
+                }
+              }}
               className="text-[#aebeac]"
             >
               <LogIn size={15} />
@@ -481,7 +499,12 @@ function Auth({
   onAuth,
 }: {
   register: boolean;
-  onAuth: (role: UserRole, name: string, email: string) => void;
+  onAuth: (
+    role: UserRole,
+    name: string,
+    email: string,
+    register: boolean,
+  ) => Promise<UserRole>;
 }) {
   const [role, setRole] = useState<UserRole>("farmer");
   const [busy, setBusy] = useState(false);
@@ -490,7 +513,9 @@ function Auth({
     nextRole === "buyer"
       ? "/buyer/dashboard"
       : nextRole === "admin"
-        ? "/impact"
+        ? appwriteConfigured
+          ? "/admin/dashboard"
+          : "/impact"
         : "/farmer/dashboard";
   const demo = (nextRole: UserRole) => {
     const name =
@@ -499,7 +524,7 @@ function Auth({
         : nextRole === "buyer"
           ? "Green Table Kitchen"
           : "Platform Admin";
-    onAuth(nextRole, name, `${nextRole}@demo.kisanconnect.in`);
+    void onAuth(nextRole, name, `${nextRole}@demo.kisanconnect.in`, false);
     router.push(destination(nextRole));
   };
   const submit = async (event: FormEvent<HTMLFormElement>) => {
@@ -513,18 +538,21 @@ function Auth({
     );
     setBusy(true);
     try {
-      if (appwriteConfigured) {
-        if (register) await createAppwriteAccount(name, email, password);
-        else await createAppwriteSession(email, password);
+      if (appwriteConfigured && register) {
+        await createAppwriteAccount(name, email, password);
+      } else if (appwriteConfigured) {
+        await createAppwriteSession(email, password);
       }
-      onAuth(role, name, email);
+      const authenticatedRole = await onAuth(role, name, email, register);
       toast.success(
         register ? "Account created" : `Welcome, ${name.split(" ")[0]}`,
       );
-      router.push(destination(role));
-    } catch {
+      router.push(destination(authenticatedRole));
+    } catch (error) {
       toast.error(
-        "Could not authenticate. Check your details or use a demo account.",
+        error instanceof Error
+          ? error.message
+          : "Could not authenticate. Check your details and Appwrite setup.",
       );
     } finally {
       setBusy(false);
@@ -566,18 +594,23 @@ function Auth({
               ? "Create an account to start trading directly."
               : "Access your produce, matches and active deals."}
           </p>
-          <div className="mt-7 grid grid-cols-3 rounded-md border border-[#e3e8e0] bg-[#f7f8f4] p-1">
-            {(["farmer", "buyer", "admin"] as const).map((item) => (
-              <button
-                key={item}
-                type="button"
-                onClick={() => setRole(item)}
-                className={`rounded py-2 text-xs font-semibold capitalize ${role === item ? "bg-white text-[#315b3d] shadow-sm" : "text-[#778178]"}`}
-              >
-                {item}
-              </button>
-            ))}
-          </div>
+          {(!appwriteConfigured || register) && (
+            <div className={`mt-7 grid ${appwriteConfigured ? "grid-cols-2" : "grid-cols-3"} rounded-md border border-[#e3e8e0] bg-[#f7f8f4] p-1`}>
+              {(appwriteConfigured
+                ? (["farmer", "buyer"] as const)
+                : (["farmer", "buyer", "admin"] as const)
+              ).map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  onClick={() => setRole(item)}
+                  className={`rounded py-2 text-xs font-semibold capitalize ${role === item ? "bg-white text-[#315b3d] shadow-sm" : "text-[#778178]"}`}
+                >
+                  {item}
+                </button>
+              ))}
+            </div>
+          )}
           <form onSubmit={submit} className="mt-5 space-y-4">
             {register && (
               <label>
@@ -622,22 +655,26 @@ function Auth({
               <ArrowRight size={14} />
             </Button>
           </form>
-          <div className="my-5 flex items-center gap-3 text-[10px] text-[#9aa39a]">
-            <span className="h-px flex-1 bg-[#e5e9e1]" />
-            Or explore the demo
-            <span className="h-px flex-1 bg-[#e5e9e1]" />
-          </div>
-          <div className="grid grid-cols-3 gap-2">
-            {(["farmer", "buyer", "admin"] as const).map((item) => (
-              <button
-                key={item}
-                onClick={() => demo(item)}
-                className="rounded-md border border-[#dfe5dc] px-2 py-2.5 text-[10px] font-semibold capitalize text-[#536057]"
-              >
-                Try {item}
-              </button>
-            ))}
-          </div>
+          {!appwriteConfigured && (
+            <>
+              <div className="my-5 flex items-center gap-3 text-[10px] text-[#9aa39a]">
+                <span className="h-px flex-1 bg-[#e5e9e1]" />
+                Or explore the demo
+                <span className="h-px flex-1 bg-[#e5e9e1]" />
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {(["farmer", "buyer", "admin"] as const).map((item) => (
+                  <button
+                    key={item}
+                    onClick={() => demo(item)}
+                    className="rounded-md border border-[#dfe5dc] px-2 py-2.5 text-[10px] font-semibold capitalize text-[#536057]"
+                  >
+                    Try {item}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
           <p className="mt-6 text-center text-xs text-[#758078]">
             {register ? "Already registered?" : "New to KhetLink?"}{" "}
             <Link
@@ -685,7 +722,15 @@ function Empty({
   );
 }
 
-function ListingTable({ items }: { items: PlatformState["produce"] }) {
+function ListingTable({
+  items,
+  onEdit,
+  onClose,
+}: {
+  items: PlatformState["produce"];
+  onEdit?: (item: PlatformState["produce"][number]) => void;
+  onClose?: (item: PlatformState["produce"][number]) => void;
+}) {
   if (!items.length)
     return (
       <Empty
@@ -705,6 +750,7 @@ function ListingTable({ items }: { items: PlatformState["produce"] }) {
               "Your price",
               "Available by",
               "Status",
+              ...(onEdit || onClose ? ["Actions"] : []),
             ].map((item) => (
               <th key={item} className="px-4 py-3 font-semibold">
                 {item}
@@ -729,6 +775,30 @@ function ListingTable({ items }: { items: PlatformState["produce"] }) {
               <td className="px-4 py-3.5">
                 <span className="tag tag-green">{item.status}</span>
               </td>
+              {(onEdit || onClose) && (
+                <td className="px-4 py-3.5">
+                  {item.status === "open" && (
+                    <div className="flex items-center gap-3">
+                      {onEdit && (
+                        <button
+                          className="font-semibold text-[#47744f]"
+                          onClick={() => onEdit(item)}
+                        >
+                          Edit
+                        </button>
+                      )}
+                      {onClose && (
+                        <button
+                          className="font-semibold text-[#9b5441]"
+                          onClick={() => onClose(item)}
+                        >
+                          Close
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </td>
+              )}
             </tr>
           ))}
         </tbody>
@@ -744,7 +814,7 @@ function DealsTable({
 }: {
   items: PlatformState["deals"];
   role: UserRole;
-  update: (id: string, status: DealStatus) => void;
+  update: (id: string, status: DealStatus) => void | Promise<void>;
 }) {
   if (!items.length)
     return (
@@ -801,9 +871,13 @@ function DealsTable({
               <td className="px-4 py-3.5">
                 {deal.status === "pending" ? (
                   <button
-                    onClick={() => {
-                      update(deal.id, "confirmed");
-                      toast.success("Deal confirmed");
+                    onClick={async () => {
+                      try {
+                        await update(deal.id, "confirmed");
+                        toast.success("Deal confirmed");
+                      } catch (error) {
+                        toast.error(error instanceof Error ? error.message : "Could not update this deal.");
+                      }
                     }}
                     className="text-[10px] font-semibold text-[#47744f]"
                   >
@@ -811,9 +885,13 @@ function DealsTable({
                   </button>
                 ) : deal.status === "confirmed" ? (
                   <button
-                    onClick={() => {
-                      update(deal.id, "completed");
-                      toast.success("Deal marked complete");
+                    onClick={async () => {
+                      try {
+                        await update(deal.id, "completed");
+                        toast.success("Deal marked complete");
+                      } catch (error) {
+                        toast.error(error instanceof Error ? error.message : "Could not update this deal.");
+                      }
                     }}
                     className="text-[10px] font-semibold text-[#47744f]"
                   >
@@ -1050,16 +1128,40 @@ function FarmerDashboard({
 function ListingForm({
   role,
   onSubmit,
+  initial,
+  submitLabel,
+  onCancel,
 }: {
   role: "farmer" | "buyer";
-  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void | Promise<void>;
+  initial?: PlatformState["produce"][number] | PlatformState["demands"][number];
+  submitLabel?: string;
+  onCancel?: () => void;
 }) {
   const isFarmer = role === "farmer";
-  const [crop, setCrop] = useState("Tomato");
-  const [quantity, setQuantity] = useState("500");
-  const [price, setPrice] = useState(isFarmer ? "25" : "29");
-  const [location, setLocation] = useState("Greater Noida");
+  const [crop, setCrop] = useState(initial?.produce ?? "Tomato");
+  const [quantity, setQuantity] = useState(String(initial?.quantityKg ?? 500));
+  const [price, setPrice] = useState(
+    String(
+      initial
+        ? "askingPricePerKg" in initial
+          ? initial.askingPricePerKg
+          : initial.targetPricePerKg
+        : isFarmer
+          ? 25
+          : 29,
+    ),
+  );
+  const [location, setLocation] = useState(initial?.location ?? "Greater Noida");
   const [suggested, setSuggested] = useState(27);
+  const [minimumDate] = useState(() => dateInputValue(0));
+  const [date, setDate] = useState(
+    initial
+      ? "availableBy" in initial
+        ? initial.availableBy
+        : initial.requiredBy
+      : dateInputValue(isFarmer ? 2 : 5),
+  );
   useEffect(() => {
     void recommendPrice({
       produce: crop,
@@ -1133,7 +1235,15 @@ function ListingForm({
         {!isFarmer && (
           <label>
             <span className="field-label">Buyer type</span>
-            <select name="buyerType" className="input-field">
+            <select
+              name="buyerType"
+              defaultValue={
+                initial && "buyerType" in initial
+                  ? initial.buyerType
+                  : "Restaurant"
+              }
+              className="input-field"
+            >
               {(
                 ["Retailer", "Restaurant", "Hostel", "Small business"] as const
               ).map((item) => (
@@ -1149,8 +1259,9 @@ function ListingForm({
           <input
             name="date"
             type="date"
-            min="2026-09-30"
-            defaultValue={isFarmer ? "2026-10-02" : "2026-10-05"}
+            min={minimumDate}
+            value={date}
+            onChange={(event) => setDate(event.target.value)}
             required
             className="input-field"
           />
@@ -1170,10 +1281,18 @@ function ListingForm({
           </p>
         </div>
       )}
-      <Button type="submit">
-        {isFarmer ? "Publish produce listing" : "Post buyer demand"}
-        <ArrowRight size={14} />
-      </Button>
+      <div className="flex flex-wrap gap-2">
+        <Button type="submit">
+          {submitLabel ??
+            (isFarmer ? "Publish produce listing" : "Post buyer demand")}
+          <ArrowRight size={14} />
+        </Button>
+        {onCancel && (
+          <Button type="button" variant="secondary" onClick={onCancel}>
+            Cancel
+          </Button>
+        )}
+      </div>
       <p className="text-[10px] leading-5 text-[#8a948b]">
         All recommendations and listings are illustrative, not guaranteed market
         quotes.
@@ -1187,29 +1306,65 @@ function FarmerProduce({
   id,
   name,
   add,
+  update,
+  close,
 }: {
   state: PlatformState;
   id: string;
   name: string;
   add: ReturnType<typeof usePlatform>["addProduce"];
+  update: ReturnType<typeof usePlatform>["updateProduce"];
+  close: ReturnType<typeof usePlatform>["closeProduce"];
 }) {
   const items = state.produce.filter((item) => item.farmerId === id);
-  const submit = (event: FormEvent<HTMLFormElement>) => {
+  const [editing, setEditing] = useState<PlatformState["produce"][number] | null>(null);
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const produce = String(form.get("produce"));
     const quantityKg = Number(form.get("quantity"));
     const askingPricePerKg = Number(form.get("price"));
-    add({
-      farmerId: id,
-      farmerName: name,
-      produce,
-      quantityKg,
-      askingPricePerKg,
-      location: String(form.get("location")),
-      availableBy: String(form.get("date")),
-    });
-    toast.success(`${quantityKg} kg ${produce} listed`);
+    try {
+      await add({
+        farmerId: id,
+        farmerName: name,
+        produce,
+        quantityKg,
+        askingPricePerKg,
+        location: String(form.get("location")),
+        availableBy: String(form.get("date")),
+      });
+      toast.success(`${quantityKg} kg ${produce} listed`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not publish the listing.");
+    }
+  };
+  const saveEdit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!editing) return;
+    const form = new FormData(event.currentTarget);
+    try {
+      await update(editing.id, {
+        produce: String(form.get("produce")),
+        quantityKg: Number(form.get("quantity")),
+        askingPricePerKg: Number(form.get("price")),
+        location: String(form.get("location")),
+        availableBy: String(form.get("date")),
+      });
+      setEditing(null);
+      toast.success("Listing updated");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not update the listing.");
+    }
+  };
+  const closeItem = async (item: PlatformState["produce"][number]) => {
+    if (!window.confirm(`Close the ${item.produce} listing?`)) return;
+    try {
+      await close(item.id);
+      toast.success("Listing closed");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not close the listing.");
+    }
   };
   return (
     <>
@@ -1229,7 +1384,24 @@ function FarmerProduce({
             <span className="tag tag-green">{items.length} listings</span>
           }
         >
-          <ListingTable items={items} />
+          {editing && (
+            <div className="mb-5 rounded-md border border-[#e3e8e0] p-4">
+              <p className="mb-3 text-xs font-semibold">Edit {editing.produce} listing</p>
+              <ListingForm
+                key={editing.id}
+                role="farmer"
+                initial={editing}
+                submitLabel="Save changes"
+                onCancel={() => setEditing(null)}
+                onSubmit={saveEdit}
+              />
+            </div>
+          )}
+          <ListingTable
+            items={items}
+            onEdit={setEditing}
+            onClose={(item) => void closeItem(item)}
+          />
         </Section>
       </div>
     </>
@@ -1241,33 +1413,70 @@ function BuyerDemand({
   id,
   name,
   post,
+  update,
+  close,
 }: {
   state: PlatformState;
   id: string;
   name: string;
   post: ReturnType<typeof usePlatform>["postDemand"];
+  update: ReturnType<typeof usePlatform>["updateDemand"];
+  close: ReturnType<typeof usePlatform>["closeDemand"];
 }) {
   const router = useRouter();
+  const [editing, setEditing] = useState<PlatformState["demands"][number] | null>(null);
   const items = state.demands.filter(
-    (demand) => demand.buyerId === id && demand.status === "open" && demand.quantityKg > 0,
+    (demand) => demand.buyerId === id,
   );
-  const submit = (event: FormEvent<HTMLFormElement>) => {
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    post({
-      buyerId: id,
-      buyerName: name,
-      buyerType: String(form.get("buyerType")) as BuyerType,
-      produce: String(form.get("produce")),
-      quantityKg: Number(form.get("quantity")),
-      targetPricePerKg: Number(form.get("price")),
-      location: String(form.get("location")),
-      requiredBy: String(form.get("date")),
-    });
-    toast.success("Demand posted", {
-      description: "Nearby farmer matches are ready.",
-    });
-    router.push("/buyer/matches");
+    try {
+      await post({
+        buyerId: id,
+        buyerName: name,
+        buyerType: String(form.get("buyerType")) as BuyerType,
+        produce: String(form.get("produce")),
+        quantityKg: Number(form.get("quantity")),
+        targetPricePerKg: Number(form.get("price")),
+        location: String(form.get("location")),
+        requiredBy: String(form.get("date")),
+      });
+      toast.success("Demand posted", {
+        description: "Nearby farmer matches are ready.",
+      });
+      router.push("/buyer/matches");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not post demand.");
+    }
+  };
+  const saveEdit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!editing) return;
+    const form = new FormData(event.currentTarget);
+    try {
+      await update(editing.id, {
+        produce: String(form.get("produce")),
+        quantityKg: Number(form.get("quantity")),
+        targetPricePerKg: Number(form.get("price")),
+        buyerType: String(form.get("buyerType")) as BuyerType,
+        location: String(form.get("location")),
+        requiredBy: String(form.get("date")),
+      });
+      setEditing(null);
+      toast.success("Demand updated");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not update the demand.");
+    }
+  };
+  const closeItem = async (item: PlatformState["demands"][number]) => {
+    if (!window.confirm(`Close the ${item.produce} demand?`)) return;
+    try {
+      await close(item.id);
+      toast.success("Demand closed");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not close the demand.");
+    }
   };
   return (
     <>
@@ -1278,9 +1487,20 @@ function BuyerDemand({
       />
       <div className="grid items-start gap-5 xl:grid-cols-[.9fr_1.1fr]">
         <Section eyebrow="Purchase request" title="What do you need?">
-          <ListingForm role="buyer" onSubmit={submit} />
+          {editing ? (
+            <ListingForm
+              key={editing.id}
+              role="buyer"
+              initial={editing}
+              submitLabel="Save changes"
+              onCancel={() => setEditing(null)}
+              onSubmit={saveEdit}
+            />
+          ) : (
+            <ListingForm role="buyer" onSubmit={submit} />
+          )}
         </Section>
-        <Section eyebrow="Open requests" title="Your active demands">
+        <Section eyebrow="Your requests" title="Your demands">
           {items.length ? (
             <div className="divide-y divide-[#edf0eb]">
               {items.map((item) => (
@@ -1300,6 +1520,25 @@ function BuyerDemand({
                   <span className="text-xs font-semibold">
                     Up to {money(item.targetPricePerKg)}/kg
                   </span>
+                  {item.status === "open" && (
+                    <div className="flex gap-3 text-[10px]">
+                      <button
+                        className="font-semibold text-[#47744f]"
+                        onClick={() => setEditing(item)}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        className="font-semibold text-[#9b5441]"
+                        onClick={() => void closeItem(item)}
+                      >
+                        Close
+                      </button>
+                    </div>
+                  )}
+                  {item.status !== "open" && (
+                    <span className="tag tag-green">{item.status}</span>
+                  )}
                 </div>
               ))}
             </div>
@@ -1325,7 +1564,7 @@ function Matches({
   state: PlatformState;
   role: "farmer" | "buyer";
   id: string;
-  accept: (demandId: string, produceId: string) => void;
+  accept: (demandId: string, produceId: string) => Promise<void>;
 }) {
   const pairs =
     role === "farmer"
@@ -1352,6 +1591,7 @@ function Matches({
             })),
           );
   const router = useRouter();
+  const [acceptingMatch, setAcceptingMatch] = useState<string | null>(null);
   return (
     <>
       <Heading
@@ -1412,17 +1652,29 @@ function Matches({
                   </p>
                 </div>
                 <Button
-                  onClick={() => {
-                    accept(demand.id, produce.id);
-                    toast.success("Deal confirmed", {
-                      description: `${quantity} kg of ${produce.produce}`,
-                    });
-                    router.push(
-                      role === "farmer" ? "/farmer/orders" : "/buyer/orders",
-                    );
+                  disabled={acceptingMatch === `${demand.id}-${produce.id}`}
+                  onClick={async () => {
+                    setAcceptingMatch(`${demand.id}-${produce.id}`);
+                    try {
+                      await accept(demand.id, produce.id);
+                      toast.success("Deal confirmed", {
+                        description: `${quantity} kg of ${produce.produce}`,
+                      });
+                      router.push(
+                        role === "farmer" ? "/farmer/orders" : "/buyer/orders",
+                      );
+                    } catch (error) {
+                      toast.error(error instanceof Error ? error.message : "Could not accept this match.");
+                    } finally {
+                      setAcceptingMatch(null);
+                    }
                   }}
                 >
-                  {role === "farmer" ? "Accept this deal" : "Accept farmer"}
+                  {acceptingMatch === `${demand.id}-${produce.id}`
+                    ? "Confirming…"
+                    : role === "farmer"
+                      ? "Accept this deal"
+                      : "Accept farmer"}
                   <ArrowRight size={14} />
                 </Button>
               </div>
@@ -1506,7 +1758,178 @@ function Orders({
   );
 }
 
-function Earnings({ state, id }: { state: PlatformState; id: string }) {
+function AdminDashboard({
+  state,
+  closeListing,
+  setUserStatus,
+}: {
+  state: PlatformState;
+  closeListing: ReturnType<typeof usePlatform>["adminCloseListing"];
+  setUserStatus: ReturnType<typeof usePlatform>["adminSetUserStatus"];
+}) {
+  const users = state.adminUsers ?? [];
+  const closeItem = async (kind: "produce" | "demand", id: string) => {
+    if (!window.confirm("Close this open marketplace listing?")) return;
+    try {
+      await closeListing(kind, id);
+      toast.success("Listing closed");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not close the listing.");
+    }
+  };
+  const changeUserStatus = async (id: string, status: boolean) => {
+    try {
+      await setUserStatus(id, status);
+      toast.success(status ? "Account enabled" : "Account disabled");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not update the account.");
+    }
+  };
+  return (
+    <>
+      <Heading
+        eyebrow="Restricted workspace"
+        title="Platform administration"
+        subtitle="Manage registered accounts and close inappropriate or unavailable marketplace listings."
+      />
+      <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Metric label="Registered accounts" value={`${users.length}`} helper="Appwrite accounts" icon={Users} />
+        <Metric label="Farmers" value={`${state.farmers.length}`} helper="Farmer profiles" icon={Sprout} />
+        <Metric label="Buyers" value={`${state.buyers.length}`} helper="Buyer profiles" icon={Store} />
+        <Metric label="Orders" value={`${state.deals.length}`} helper="All platform orders" icon={ClipboardList} />
+      </div>
+      <Section eyebrow="Accounts" title="Registered users">
+        {users.length ? (
+          <div className="table-scroll">
+            <table className="w-full min-w-[560px] text-left">
+              <thead className="table-head">
+                <tr>
+                  {["Name", "Email", "Role", "Status", "Management"].map((item) => (
+                    <th key={item} className="px-4 py-3 font-semibold">{item}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {users.map((user) => (
+                  <tr key={user.id} className="table-row text-xs">
+                    <td className="px-4 py-3.5 font-semibold">{user.name}</td>
+                    <td className="px-4 py-3.5">{user.email}</td>
+                    <td className="px-4 py-3.5 capitalize">{user.role ?? "No profile"}</td>
+                    <td className="px-4 py-3.5">
+                      <span className={`tag ${user.status ? "tag-green" : "tag-amber"}`}>
+                        {user.status ? "enabled" : "disabled"}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3.5">
+                      {user.role && (
+                        <button
+                          className="font-semibold text-[#47744f]"
+                          onClick={() => void changeUserStatus(user.id, !user.status)}
+                        >
+                          {user.status
+                            ? "Disable KhetLink access"
+                            : "Enable KhetLink access"}
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <Empty title="No Appwrite accounts found" body="Registered accounts will appear here." icon={Users} />
+        )}
+      </Section>
+      <div className="mt-5 grid gap-5">
+        <Section eyebrow="Marketplace supply" title="All produce listings">
+          <ListingTable
+            items={state.produce}
+            onClose={(item) => void closeItem("produce", item.id)}
+          />
+        </Section>
+        <Section eyebrow="Marketplace demand" title="All buyer demands">
+          {state.demands.length ? (
+            <div className="table-scroll">
+              <table className="w-full min-w-[620px] text-left">
+                <thead className="table-head">
+                  <tr>
+                    {["Buyer", "Produce", "Quantity", "Target", "Location", "Status", "Management"].map((item) => (
+                      <th key={item} className="px-4 py-3 font-semibold">{item}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {state.demands.map((demand) => (
+                    <tr key={demand.id} className="table-row text-xs">
+                      <td className="px-4 py-3.5 font-semibold">{demand.buyerName}</td>
+                      <td className="px-4 py-3.5">{demand.produce}</td>
+                      <td className="px-4 py-3.5">{demand.quantityKg} kg</td>
+                      <td className="px-4 py-3.5">{money(demand.targetPricePerKg)}/kg</td>
+                      <td className="px-4 py-3.5">{demand.location}</td>
+                      <td className="px-4 py-3.5"><span className="tag tag-green">{demand.status}</span></td>
+                      <td className="px-4 py-3.5">
+                        {demand.status === "open" && (
+                          <button
+                            className="font-semibold text-[#9b5441]"
+                            onClick={() => void closeItem("demand", demand.id)}
+                          >
+                            Close
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <Empty title="No demands found" body="Buyer demands will appear here." icon={ClipboardList} />
+          )}
+        </Section>
+        <Section eyebrow="All activity" title="Platform orders">
+          {state.deals.length ? (
+            <div className="table-scroll">
+              <table className="w-full min-w-[620px] text-left">
+                <thead className="table-head">
+                  <tr>
+                    {["Produce", "Farmer", "Buyer", "Quantity", "Value", "Status"].map((item) => (
+                      <th key={item} className="px-4 py-3 font-semibold">{item}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {state.deals.map((deal) => (
+                    <tr key={deal.id} className="table-row text-xs">
+                      <td className="px-4 py-3.5 font-semibold">{deal.produce}</td>
+                      <td className="px-4 py-3.5">{deal.farmerName}</td>
+                      <td className="px-4 py-3.5">{deal.buyerName}</td>
+                      <td className="px-4 py-3.5">{deal.quantityKg} kg</td>
+                      <td className="px-4 py-3.5">{money(deal.totalValue)}</td>
+                      <td className="px-4 py-3.5"><span className="tag tag-green">{deal.status}</span></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <Empty title="No orders yet" body="Accepted matches will appear here." icon={Handshake} />
+          )}
+        </Section>
+      </div>
+    </>
+  );
+}
+
+function Earnings({
+  state,
+  id,
+  update,
+}: {
+  state: PlatformState;
+  id: string;
+  update: ReturnType<typeof usePlatform>["updateDealStatus"];
+}) {
   const deals = state.deals.filter(
     (deal) => deal.farmerId === id && deal.status !== "pending",
   );
@@ -1571,13 +1994,12 @@ function Earnings({ state, id }: { state: PlatformState; id: string }) {
       </div>
       <div className="mt-5">
         <Section eyebrow="Your trade" title="Accepted deals">
-          <DealsTable items={deals} role="farmer" update={updateNoop} />
+          <DealsTable items={deals} role="farmer" update={update} />
         </Section>
       </div>
     </>
   );
 }
-function updateNoop() {}
 function ChartPrice() {
   return (
     <div className="h-[280px]">
@@ -2005,18 +2427,30 @@ function Impact({ state }: { state: PlatformState }) {
 }
 
 export default function PlatformApp({ route }: { route: string }) {
+  const router = useRouter();
+  const previousRoute = useRef(route);
   const {
     state,
+    isReady,
+    loadError,
+    syncState,
+    refreshState,
     signIn,
     signOut,
     addProduce,
     postDemand,
+    updateProduce,
+    updateDemand,
+    closeProduce,
+    closeDemand,
+    adminCloseListing,
+    adminSetUserStatus,
     acceptMatch,
     updateDealStatus,
   } = usePlatform();
   const parts = route.split("/");
-  const routeRole: "farmer" | "buyer" =
-    parts[0] === "buyer" ? "buyer" : "farmer";
+  const routeRole: UserRole =
+    parts[0] === "admin" ? "admin" : parts[0] === "buyer" ? "buyer" : "farmer";
   const name =
     state.user?.name ??
     (routeRole === "farmer" ? "Ravi Kumar" : "Green Table Kitchen");
@@ -2026,11 +2460,109 @@ export default function PlatformApp({ route }: { route: string }) {
       : routeRole === "farmer"
         ? "farmer-demo"
         : "buyer-demo";
-  const onAuth = (role: UserRole, userName: string, email: string) =>
-    signIn(role, userName, email);
+  const requiresRole =
+    route.startsWith("farmer/") ||
+    route.startsWith("buyer/") ||
+    route.startsWith("admin/");
+
+  useEffect(() => {
+    if (!appwriteConfigured || !isReady || !requiresRole) return;
+    if (!state.user) {
+      router.replace("/login");
+    } else if (state.user.role !== routeRole) {
+      router.replace(
+        state.user.role === "admin"
+          ? "/admin/dashboard"
+          : state.user.role === "buyer"
+            ? "/buyer/dashboard"
+            : "/farmer/dashboard",
+      );
+    }
+  }, [isReady, requiresRole, routeRole, router, state.user]);
+
+  useEffect(() => {
+    if (previousRoute.current === route) return;
+    previousRoute.current = route;
+    if (
+      !appwriteConfigured ||
+      !isReady ||
+      !route ||
+      route === "login" ||
+      route === "register"
+    ) {
+      return;
+    }
+    void refreshState().catch((error: unknown) => {
+      toast.error(error instanceof Error ? error.message : "Could not refresh platform data.");
+    });
+  }, [isReady, refreshState, route]);
+
+  const onAuth = async (
+    role: UserRole,
+    userName: string,
+    email: string,
+    register: boolean,
+  ) => {
+    if (!appwriteConfigured) {
+      signIn(role, userName, email);
+      return role;
+    }
+    const remoteState = register
+      ? await createPlatformProfile(role, userName)
+      : await loadPlatformState(true);
+    if (!remoteState.user) {
+      throw new Error("The KhetLink profile could not be loaded.");
+    }
+    syncState(remoteState);
+    return remoteState.user.role;
+  };
   if (!route) return <Home />;
   if (route === "login" || route === "register")
     return <Auth register={route === "register"} onAuth={onAuth} />;
+  if (appwriteConfigured && requiresRole && !isReady) {
+    return (
+      <main className="grid min-h-screen place-items-center text-sm text-[#667568]">
+        Loading your KhetLink workspace…
+      </main>
+    );
+  }
+  if (appwriteConfigured && requiresRole && loadError) {
+    return (
+      <main className="grid min-h-screen place-items-center p-5">
+        <div className="panel max-w-lg p-8 text-center">
+          <h1 className="page-title text-[26px]">Could not load your workspace</h1>
+          <p className="mt-3 text-sm text-[#778178]">{loadError}</p>
+          <div className="mt-5 flex flex-wrap justify-center gap-2">
+            <Button onClick={() => window.location.reload()}>Try again</Button>
+            <Button
+              variant="secondary"
+              onClick={async () => {
+                try {
+                  await signOut();
+                  router.replace("/login");
+                } catch (error) {
+                  toast.error(error instanceof Error ? error.message : "Could not sign out.");
+                }
+              }}
+            >
+              Sign out
+            </Button>
+          </div>
+        </div>
+      </main>
+    );
+  }
+  if (
+    appwriteConfigured &&
+    requiresRole &&
+    (!state.user || state.user.role !== routeRole)
+  ) {
+    return (
+      <main className="grid min-h-screen place-items-center text-sm text-[#667568]">
+        Opening your KhetLink workspace…
+      </main>
+    );
+  }
   if (route === "marketplace")
     return (
       <Workspace route={route} role={routeRole} name={name} signOut={signOut}>
@@ -2073,7 +2605,11 @@ export default function PlatformApp({ route }: { route: string }) {
         name={state.user?.name ?? "Green Table Kitchen"}
         signOut={signOut}
       >
-        <BuyerDashboard state={state} userId={userId} />
+        <BuyerDashboard
+          state={state}
+          userId={userId}
+          update={updateDealStatus}
+        />
       </Workspace>
     );
   if (route === "farmer/produce")
@@ -2089,6 +2625,8 @@ export default function PlatformApp({ route }: { route: string }) {
           id={userId}
           name={state.user?.name ?? "Ravi Kumar"}
           add={addProduce}
+          update={updateProduce}
+          close={closeProduce}
         />
       </Workspace>
     );
@@ -2105,6 +2643,8 @@ export default function PlatformApp({ route }: { route: string }) {
           id={userId}
           name={state.user?.name ?? "Green Table Kitchen"}
           post={postDemand}
+          update={updateDemand}
+          close={closeDemand}
         />
       </Workspace>
     );
@@ -2135,7 +2675,7 @@ export default function PlatformApp({ route }: { route: string }) {
       <Workspace route={route} role={routeRole} name={name} signOut={signOut}>
         <Orders
           state={state}
-          role={routeRole}
+          role={route.startsWith("buyer/") ? "buyer" : "farmer"}
           id={userId}
           update={updateDealStatus}
         />
@@ -2149,7 +2689,22 @@ export default function PlatformApp({ route }: { route: string }) {
         name={state.user?.name ?? "Ravi Kumar"}
         signOut={signOut}
       >
-        <Earnings state={state} id={userId} />
+        <Earnings state={state} id={userId} update={updateDealStatus} />
+      </Workspace>
+    );
+  if (route === "admin/dashboard")
+    return (
+      <Workspace
+        route={route}
+        role="admin"
+        name={state.user?.name ?? "Platform Admin"}
+        signOut={signOut}
+      >
+        <AdminDashboard
+          state={state}
+          closeListing={adminCloseListing}
+          setUserStatus={adminSetUserStatus}
+        />
       </Workspace>
     );
   return (
@@ -2176,9 +2731,11 @@ export default function PlatformApp({ route }: { route: string }) {
 function BuyerDashboard({
   state,
   userId,
+  update,
 }: {
   state: PlatformState;
   userId: string;
+  update: ReturnType<typeof usePlatform>["updateDealStatus"];
 }) {
   const demands = state.demands.filter(
     (item) => item.buyerId === userId && item.status === "open" && item.quantityKg > 0,
@@ -2336,7 +2893,7 @@ function BuyerDashboard({
           <DealsTable
             items={deals.slice(0, 4)}
             role="buyer"
-            update={updateNoop}
+            update={update}
           />
         </Section>
       </div>

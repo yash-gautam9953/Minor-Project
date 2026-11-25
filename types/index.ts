@@ -9,6 +9,7 @@ export interface UserProfile {
   email: string;
   role: UserRole;
   location: string;
+  accountStatus?: "enabled" | "disabled";
 }
 
 export interface FarmerProfile {
@@ -81,14 +82,39 @@ export interface PlatformState {
   produce: ProduceListing[];
   demands: DemandListing[];
   deals: Deal[];
+  adminUsers?: AdminUser[];
+}
+
+export interface AdminUser {
+  id: string;
+  name: string;
+  email: string;
+  status: boolean;
+  role?: "farmer" | "buyer";
 }
 
 export interface PlatformActions {
   state: PlatformState;
+  isReady: boolean;
+  loadError: string | null;
+  syncState: (state: PlatformState) => void;
+  refreshState: () => Promise<void>;
   signIn: (role: UserRole, name?: string, email?: string) => void;
-  signOut: () => void;
-  addProduce: (listing: Omit<ProduceListing, "id" | "status">) => void;
-  postDemand: (demand: Omit<DemandListing, "id" | "status">) => void;
-  acceptMatch: (demandId: string, produceId: string) => void;
-  updateDealStatus: (dealId: string, status: DealStatus) => void;
+  signOut: () => Promise<void>;
+  addProduce: (listing: Omit<ProduceListing, "id" | "status">) => Promise<void>;
+  postDemand: (demand: Omit<DemandListing, "id" | "status">) => Promise<void>;
+  updateProduce: (
+    produceId: string,
+    listing: Pick<ProduceListing, "produce" | "quantityKg" | "askingPricePerKg" | "location" | "availableBy">,
+  ) => Promise<void>;
+  updateDemand: (
+    demandId: string,
+    demand: Pick<DemandListing, "produce" | "quantityKg" | "targetPricePerKg" | "location" | "requiredBy" | "buyerType">,
+  ) => Promise<void>;
+  closeProduce: (produceId: string) => Promise<void>;
+  closeDemand: (demandId: string) => Promise<void>;
+  adminCloseListing: (kind: "produce" | "demand", documentId: string) => Promise<void>;
+  adminSetUserStatus: (userId: string, status: boolean) => Promise<void>;
+  acceptMatch: (demandId: string, produceId: string) => Promise<void>;
+  updateDealStatus: (dealId: string, status: DealStatus) => Promise<void>;
 }
