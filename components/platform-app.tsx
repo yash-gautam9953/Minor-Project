@@ -1,6 +1,5 @@
 "use client";
 
-import dynamic from "next/dynamic";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -11,9 +10,11 @@ import {
   Bell,
   Check,
   ClipboardList,
+  Eye,
+  EyeOff,
   Handshake,
   Leaf,
-  LogIn,
+  LogOut,
   MapPin,
   Package,
   Plus,
@@ -23,23 +24,9 @@ import {
   TrendingUp,
   Users,
 } from "lucide-react";
-import {
-  Area,
-  AreaChart,
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Legend,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
 import { toast } from "sonner";
+import DemandMap from "@/components/demand-map";
 import {
-  appwriteConfigured,
   createAppwriteAccount,
   createPlatformProfile,
   createAppwriteSession,
@@ -47,24 +34,9 @@ import {
 } from "@/lib/appwrite";
 import { Button as UiButton } from "@/components/ui/button";
 import { usePlatform } from "@/services/platform-store";
-import {
-  crops,
-  demandTrend,
-  locations,
-  priceHistory,
-} from "@/services/mock-data";
+import { crops, locations } from "@/services/platform-options";
 import { findDemandMatches, findFarmerMatches } from "@/services/matching";
-import { recommendPrice } from "@/services/price-recommendation";
 import type { BuyerType, DealStatus, PlatformState, UserRole } from "@/types";
-
-const DemandMap = dynamic(() => import("@/components/demand-map"), {
-  ssr: false,
-  loading: () => (
-    <div className="hero-grain grid h-[300px] place-items-center rounded-md text-sm text-[#667568]">
-      Loading local map…
-    </div>
-  ),
-});
 const money = (value: number) =>
   new Intl.NumberFormat("en-IN", {
     style: "currency",
@@ -107,7 +79,7 @@ function Brand({ dark = false }: { dark?: boolean }) {
         className={`brand-label font-semibold tracking-[-.02em] ${dark ? "text-[#1f3829]" : "text-white"}`}
       >
         khetlink
-        <span className="ml-1 text-[9px] font-medium opacity-60">
+        <span className="brand-caption ml-1 text-[9px] font-medium opacity-60">
           LOCAL TRADE
         </span>
       </span>
@@ -128,14 +100,14 @@ function Heading({
 }) {
   return (
     <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
-      <div>
+      <div className="min-w-0 flex-1">
         <p className="eyebrow mb-2">{eyebrow}</p>
         <h1 className="page-title text-[34px] sm:text-[39px]">{title}</h1>
         <p className="mt-2 max-w-[650px] text-xs leading-5 text-[#778178]">
           {subtitle}
         </p>
       </div>
-      {action}
+      {action && <div className="heading-action">{action}</div>}
     </div>
   );
 }
@@ -249,6 +221,9 @@ function Workspace({
     <Link
       key={href}
       href={href}
+      aria-label={label}
+      aria-current={route === href.slice(1) ? "page" : undefined}
+      title={label}
       className={`side-link ${route === href.slice(1) ? "active" : ""}`}
     >
       <Icon size={17} />
@@ -257,14 +232,21 @@ function Workspace({
   );
   return (
     <div className="platform-shell flex">
+      <a className="skip-link" href="#main-content">
+        Skip to content
+      </a>
       <aside className="sidebar">
         <div className="mb-9 px-1">
           <Brand />
         </div>
         <p className="side-section !pt-0">Workspace</p>
-        <nav className="space-y-1">{links.map(sideLink)}</nav>
+        <nav aria-label="Workspace navigation" className="space-y-1">
+          {links.map(sideLink)}
+        </nav>
         <p className="side-section">Explore</p>
-        <nav className="space-y-1">{commonNav.map(sideLink)}</nav>
+        <nav aria-label="Explore navigation" className="space-y-1">
+          {commonNav.map(sideLink)}
+        </nav>
         <div className="mt-auto rounded-lg border border-white/10 bg-white/[.045] p-3">
           <div className="flex items-center gap-2.5">
             <span className="grid size-8 place-items-center rounded-full bg-[#d6ed8a] text-xs font-bold text-[#234b35]">
@@ -286,9 +268,9 @@ function Workspace({
                   toast.error(error instanceof Error ? error.message : "Could not sign out.");
                 }
               }}
-              className="text-[#aebeac]"
+              className="grid size-10 place-items-center rounded-md text-[#d0dbd0] hover:bg-white/10"
             >
-              <LogIn size={15} />
+              <LogOut size={16} />
             </button>
           </div>
         </div>
@@ -318,12 +300,13 @@ function Workspace({
             </span>
           </div>
         </header>
-        <nav className="mobile-nav hidden">
-          {[...links.slice(0, 4), ...commonNav.slice(0, 2)].map(
+        <nav aria-label="Workspace navigation" className="mobile-nav">
+          {[...links, ...commonNav].map(
             ([label, href]) => (
               <Link
                 key={href}
                 href={href}
+                aria-current={route === href.slice(1) ? "page" : undefined}
                 className={route === href.slice(1) ? "active" : ""}
               >
                 {label}
@@ -331,7 +314,9 @@ function Workspace({
             ),
           )}
         </nav>
-        <main className="page-wrap fade-up">{children}</main>
+        <main id="main-content" className="page-wrap fade-up">
+          {children}
+        </main>
       </div>
     </div>
   );
@@ -340,9 +325,15 @@ function Workspace({
 function Home() {
   return (
     <main className="min-h-screen bg-[#f8f9f4]">
-      <header className="flex h-[74px] items-center justify-between border-b border-[#e5e9e1] px-6 md:px-12">
+      <a className="skip-link" href="#main-content">
+        Skip to content
+      </a>
+      <header className="flex h-[74px] items-center justify-between border-b border-[#e5e9e1] px-4 sm:px-6 md:px-12">
         <Brand dark />
-        <nav className="hidden gap-8 text-xs text-[#536057] md:flex">
+        <nav
+          aria-label="Main navigation"
+          className="hidden gap-8 text-xs text-[#536057] md:flex"
+        >
           <Link href="/marketplace">Explore local trade</Link>
           <Link href="/price-transparency">Price transparency</Link>
           <Link href="/impact">Our impact</Link>
@@ -350,7 +341,7 @@ function Home() {
         <div className="flex items-center gap-2">
           <Link
             href="/login"
-            className="hidden px-3 py-2 text-xs font-semibold sm:block"
+            className="px-2 py-2 text-xs font-semibold sm:px-3"
           >
             Log in
           </Link>
@@ -358,14 +349,24 @@ function Home() {
             href="/register"
             className="btn-dark inline-flex min-h-10 items-center gap-2 rounded-md px-4 text-xs font-semibold"
           >
-            Join the network <ArrowRight size={14} />
+            <span className="hidden sm:inline">Join the network</span>
+            <span className="sm:hidden">Sign up</span>
+            <ArrowRight size={14} />
           </Link>
         </div>
       </header>
-      <section className="mx-auto grid w-full max-w-[1280px] items-center gap-10 px-6 pb-14 pt-12 md:grid-cols-[.92fr_1.08fr] md:px-12 md:pb-20 md:pt-[72px]">
+      <nav aria-label="Explore KhetLink" className="home-mobile-nav md:hidden">
+        <Link href="/marketplace">Explore local trade</Link>
+        <Link href="/price-transparency">Price transparency</Link>
+        <Link href="/impact">Our impact</Link>
+      </nav>
+      <section
+        id="main-content"
+        className="mx-auto grid w-full max-w-[1280px] items-center gap-10 px-6 pb-14 pt-12 md:grid-cols-[.92fr_1.08fr] md:px-12 md:pb-20 md:pt-[72px]"
+      >
         <div className="fade-up">
           <p className="eyebrow mb-5">A fairer way to trade local produce</p>
-          <h1 className="page-title max-w-[570px] text-[48px] sm:text-[58px]">
+          <h1 className="page-title hero-title max-w-[570px]">
             Good produce.
             <br />
             <span className="text-[#56835c]">Better deals.</span>
@@ -373,8 +374,9 @@ function Home() {
             Closer to home.
           </h1>
           <p className="mt-6 max-w-[460px] text-[15px] leading-7 text-[#6d786f]">
-            We connect nearby farmers directly with restaurants, retailers and
-            local businesses. Clear prices, less waste, stronger farm earnings.
+            We connect nearby farmers with local businesses. Listings show
+            prices entered by their owners; verified market-price data is not
+            available yet.
           </p>
           <div className="mt-8 flex flex-wrap gap-3">
             <Link
@@ -390,25 +392,29 @@ function Home() {
               I buy in bulk <Store size={15} />
             </Link>
           </div>
-          <div className="mt-11 flex items-center gap-7 border-t border-[#e3e8de] pt-5">
+          <div className="mt-11 flex flex-wrap items-center gap-x-7 gap-y-3 border-t border-[#e3e8de] pt-5">
             <div>
-              <p className="font-serif text-[23px] text-[#244830]">₹0</p>
+              <p className="font-serif text-[18px] text-[#244830]">
+                For farmers
+              </p>
               <p className="mt-1 text-[10px] text-[#7a857b]">
-                commission on demo deals
+                list produce and find buyers
               </p>
             </div>
             <div className="h-9 w-px bg-[#dfe5dc]" />
             <div>
-              <p className="font-serif text-[23px] text-[#244830]">Local</p>
+              <p className="font-serif text-[18px] text-[#244830]">
+                For buyers
+              </p>
               <p className="mt-1 text-[10px] text-[#7a857b]">
-                demand, matched nearby
+                post demand and find produce
               </p>
             </div>
             <Link
               href="/login"
-              className="ml-auto hidden text-[11px] font-semibold text-[#507b55] underline underline-offset-4 sm:block"
+              className="text-[11px] font-semibold text-[#507b55] underline underline-offset-4 sm:ml-auto"
             >
-              Try the live demo
+              Log in
             </Link>
           </div>
         </div>
@@ -416,8 +422,9 @@ function Home() {
           <div className="relative h-[340px] overflow-hidden rounded-lg bg-[#d7dfcf] sm:h-[435px]">
             <Image
               src="https://images.unsplash.com/photo-1546094096-0df4bcaaa337?auto=format&fit=crop&w=1400&q=85"
-              alt="Freshly harvested tomatoes ready for local trade"
+              alt="Fresh produce ready for local trade"
               fill
+              loading="eager"
               unoptimized
               sizes="(min-width: 768px) 55vw, 100vw"
               className="object-cover"
@@ -426,27 +433,13 @@ function Home() {
             <div className="absolute bottom-5 left-5 right-5 flex items-end justify-between text-white">
               <div>
                 <p className="text-[10px] uppercase tracking-[.14em] text-white/75">
-                  A real local match
+                  KhetLink marketplace
                 </p>
                 <p className="mt-1 font-serif text-[23px]">
-                  Greater Noida, today
+                  Local produce, local trade
                 </p>
               </div>
-              <span className="rounded-md bg-white/15 px-3 py-2 text-[11px] backdrop-blur">
-                Tomatoes · ₹25/kg
-              </span>
             </div>
-          </div>
-          <div className="absolute -bottom-5 -left-5 hidden max-w-[245px] rounded-md border border-[#e0e7dc] bg-white p-4 shadow-lg sm:block">
-            <p className="text-[10px] font-semibold uppercase tracking-[.09em] text-[#6d786f]">
-              Demand nearby
-            </p>
-            <p className="mt-2 text-[13px] font-semibold">
-              Green Table Kitchen
-            </p>
-            <p className="mt-1 text-[11px] text-[#788279]">
-              300 kg tomatoes · pays up to ₹29/kg
-            </p>
           </div>
         </div>
       </section>
@@ -460,8 +453,8 @@ function Home() {
             ],
             [
               BarChart3,
-              "Prices in the open",
-              "Compare farm, market and retail estimates side by side.",
+              "Clear listing prices",
+              "See asking and target prices entered by farmers and buyers.",
             ],
             [
               Handshake,
@@ -485,7 +478,7 @@ function Home() {
       </section>
       <footer className="flex flex-wrap justify-between gap-3 px-6 py-6 text-[10px] text-[#7a857b] md:px-12">
         <span>© 2026 KhetLink · SIH prototype</span>
-        <span>All example prices and listings are demo data.</span>
+        <span>Listings, demands, and orders come from Appwrite records.</span>
         <Link href="/impact" className="font-semibold text-[#4c7651]">
           See platform impact →
         </Link>
@@ -504,29 +497,20 @@ function Auth({
     name: string,
     email: string,
     register: boolean,
+    location: string,
+    buyerType: BuyerType | "",
   ) => Promise<UserRole>;
 }) {
   const [role, setRole] = useState<UserRole>("farmer");
   const [busy, setBusy] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const router = useRouter();
   const destination = (nextRole: UserRole) =>
     nextRole === "buyer"
       ? "/buyer/dashboard"
       : nextRole === "admin"
-        ? appwriteConfigured
-          ? "/admin/dashboard"
-          : "/impact"
+        ? "/admin/dashboard"
         : "/farmer/dashboard";
-  const demo = (nextRole: UserRole) => {
-    const name =
-      nextRole === "farmer"
-        ? "Ravi Kumar"
-        : nextRole === "buyer"
-          ? "Green Table Kitchen"
-          : "Platform Admin";
-    void onAuth(nextRole, name, `${nextRole}@demo.kisanconnect.in`, false);
-    router.push(destination(nextRole));
-  };
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -534,16 +518,25 @@ function Auth({
     const password = String(form.get("password"));
     const name = String(
       form.get("name") ||
-        (role === "farmer" ? "Ravi Kumar" : "Green Table Kitchen"),
+        "",
     );
+    const location = String(form.get("location") || "");
+    const buyerType = String(form.get("buyerType") || "") as BuyerType | "";
     setBusy(true);
     try {
-      if (appwriteConfigured && register) {
+      if (register) {
         await createAppwriteAccount(name, email, password);
-      } else if (appwriteConfigured) {
+      } else {
         await createAppwriteSession(email, password);
       }
-      const authenticatedRole = await onAuth(role, name, email, register);
+      const authenticatedRole = await onAuth(
+        role,
+        name,
+        email,
+        register,
+        location,
+        buyerType,
+      );
       toast.success(
         register ? "Account created" : `Welcome, ${name.split(" ")[0]}`,
       );
@@ -560,22 +553,28 @@ function Auth({
   };
   return (
     <main className="grid min-h-screen bg-white lg:grid-cols-[.92fr_1.08fr]">
+      <a
+        className="skip-link"
+        href={register ? "#auth-name" : "#auth-email"}
+      >
+        Skip to form
+      </a>
       <section className="hero-grain hidden min-h-screen flex-col justify-between p-10 lg:flex">
         <Brand dark />
         <div className="max-w-[530px]">
           <p className="eyebrow mb-4">A better market starts nearby</p>
-          <h1 className="page-title text-[46px]">
+          <h1 className="page-title auth-hero-title">
             Make the next
             <br />
             good deal <span className="text-[#56835c]">local.</span>
           </h1>
           <p className="mt-5 max-w-md text-sm leading-6 text-[#647165]">
-            A working demo connecting farms with the local kitchens and shops
-            that need them.
+            A local marketplace connecting farms with kitchens, shops and
+            other bulk buyers.
           </p>
         </div>
         <p className="text-[10px] text-[#6d786f]">
-          Example listings and prices · NCR demo region
+          Appwrite-backed marketplace · Listings and prices are user-entered
         </p>
       </section>
       <section className="flex min-h-screen items-center justify-center px-5 py-10 sm:px-10">
@@ -591,18 +590,20 @@ function Auth({
           </h1>
           <p className="mt-2 text-sm text-[#778178]">
             {register
-              ? "Create an account to start trading directly."
-              : "Access your produce, matches and active deals."}
+              ? "Create an account to sell or buy local produce."
+              : "View your listings, matches and orders."}
           </p>
-          {(!appwriteConfigured || register) && (
-            <div className={`mt-7 grid ${appwriteConfigured ? "grid-cols-2" : "grid-cols-3"} rounded-md border border-[#e3e8e0] bg-[#f7f8f4] p-1`}>
-              {(appwriteConfigured
-                ? (["farmer", "buyer"] as const)
-                : (["farmer", "buyer", "admin"] as const)
-              ).map((item) => (
+          {register && (
+            <div
+              role="group"
+              aria-label="Account type"
+              className="mt-7 grid grid-cols-2 rounded-md border border-[#e3e8e0] bg-[#f7f8f4] p-1"
+            >
+              {(["farmer", "buyer"] as const).map((item) => (
                 <button
                   key={item}
                   type="button"
+                  aria-pressed={role === item}
                   onClick={() => setRole(item)}
                   className={`rounded py-2 text-xs font-semibold capitalize ${role === item ? "bg-white text-[#315b3d] shadow-sm" : "text-[#778178]"}`}
                 >
@@ -611,70 +612,124 @@ function Auth({
               ))}
             </div>
           )}
-          <form onSubmit={submit} className="mt-5 space-y-4">
+          <form onSubmit={submit} className="auth-form">
             {register && (
-              <label>
-                <span className="field-label">
+              <div>
+                <label className="field-label" htmlFor="auth-name">
                   {role === "farmer" ? "Your name" : "Business name"}
-                </span>
+                </label>
                 <input
+                  id="auth-name"
                   className="input-field"
                   name="name"
                   placeholder={
                     role === "farmer"
-                      ? "e.g. Ravi Kumar"
-                      : "e.g. Green Table Kitchen"
+                      ? "Enter your name"
+                      : "Enter your business name"
                   }
+                  autoComplete={role === "farmer" ? "name" : "organization"}
                   required
                 />
-              </label>
+              </div>
             )}
-            <label>
-              <span className="field-label">Email address</span>
+            {register && (
+              <>
+                <div>
+                  <label className="field-label" htmlFor="auth-location">
+                    Your location
+                  </label>
+                  <select
+                    id="auth-location"
+                    className="input-field"
+                    name="location"
+                    defaultValue=""
+                    required
+                  >
+                    <option value="" disabled>
+                      Select a location
+                    </option>
+                    {locations.map((location) => (
+                      <option key={location} value={location}>
+                        {location}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {role === "buyer" && (
+                  <div>
+                    <label className="field-label" htmlFor="auth-buyer-type">
+                      Buyer type
+                    </label>
+                    <select
+                      id="auth-buyer-type"
+                      className="input-field"
+                      name="buyerType"
+                      defaultValue=""
+                      required
+                    >
+                      <option value="" disabled>
+                        Select a buyer type
+                      </option>
+                      {(
+                        ["Retailer", "Restaurant", "Hostel", "Small business"] as const
+                      ).map((item) => (
+                        <option key={item} value={item}>
+                          {item}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </>
+            )}
+            <div>
+              <label className="field-label" htmlFor="auth-email">
+                Email address
+              </label>
               <input
+                id="auth-email"
                 className="input-field"
                 name="email"
                 type="email"
                 placeholder="you@example.com"
+                autoComplete="email"
+                autoCapitalize="none"
+                spellCheck={false}
                 required
               />
-            </label>
-            <label>
-              <span className="field-label">Password</span>
-              <input
-                className="input-field"
-                name="password"
-                type="password"
-                minLength={8}
-                placeholder="At least 8 characters"
-                required
-              />
-            </label>
-            <Button disabled={busy} className="w-full">
+            </div>
+            <div>
+              <label className="field-label" htmlFor="auth-password">
+                Password
+              </label>
+              <div className="password-field">
+                <input
+                  id="auth-password"
+                  className="input-field"
+                  name="password"
+                  type={showPassword ? "text" : "password"}
+                  autoComplete={register ? "new-password" : "current-password"}
+                  minLength={8}
+                  placeholder="At least 8 characters"
+                  required
+                />
+                <button
+                  type="button"
+                  className="password-toggle"
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  aria-pressed={showPassword}
+                  title={showPassword ? "Hide password" : "Show password"}
+                  onClick={() => setShowPassword((visible) => !visible)}
+                >
+                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+            </div>
+            <Button type="submit" disabled={busy} aria-busy={busy} className="w-full">
               {busy ? "Please wait…" : register ? "Create account" : "Sign in"}
               <ArrowRight size={14} />
             </Button>
           </form>
-          {!appwriteConfigured && (
-            <>
-              <div className="my-5 flex items-center gap-3 text-[10px] text-[#9aa39a]">
-                <span className="h-px flex-1 bg-[#e5e9e1]" />
-                Or explore the demo
-                <span className="h-px flex-1 bg-[#e5e9e1]" />
-              </div>
-              <div className="grid grid-cols-3 gap-2">
-                {(["farmer", "buyer", "admin"] as const).map((item) => (
-                  <button
-                    key={item}
-                    onClick={() => demo(item)}
-                    className="rounded-md border border-[#dfe5dc] px-2 py-2.5 text-[10px] font-semibold capitalize text-[#536057]"
-                  >
-                    Try {item}
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
           <p className="mt-6 text-center text-xs text-[#758078]">
             {register ? "Already registered?" : "New to KhetLink?"}{" "}
             <Link
@@ -685,9 +740,7 @@ function Auth({
             </Link>
           </p>
           <p className="mt-5 text-center text-[10px] text-[#8a948b]">
-            {appwriteConfigured
-              ? "Secure Appwrite authentication enabled"
-              : "Demo mode · data stays in this browser"}
+            Your account and marketplace records are stored in Appwrite.
           </p>
         </div>
       </section>
@@ -740,7 +793,12 @@ function ListingTable({
       />
     );
   return (
-    <div className="table-scroll">
+    <div
+      role="region"
+      aria-label="Produce listings"
+      tabIndex={0}
+      className="table-scroll"
+    >
       <table className="w-full min-w-[560px] text-left">
         <thead className="table-head">
           <tr>
@@ -825,7 +883,12 @@ function DealsTable({
       />
     );
   return (
-    <div className="table-scroll">
+    <div
+      role="region"
+      aria-label="Orders and deals"
+      tabIndex={0}
+      className="table-scroll"
+    >
       <table className="w-full min-w-[650px] text-left">
         <thead className="table-head">
           <tr>
@@ -922,7 +985,7 @@ function FarmerDashboard({
     .filter((item) => item.status === "open")
     .reduce((sum, item) => sum + item.quantityKg, 0);
   const earnings = deals
-    .filter((item) => item.status !== "pending")
+    .filter((item) => item.status === "completed")
     .reduce((sum, item) => sum + item.totalValue, 0);
   const matchingDemands = state.demands.filter((demand) =>
     demand.status === "open" &&
@@ -931,9 +994,9 @@ function FarmerDashboard({
   return (
     <>
       <Heading
-        eyebrow="Farmer workspace · Greater Noida"
+        eyebrow={`Farmer workspace · ${state.user?.location ?? "Location unavailable"}`}
         title="Your farm, in good company."
-        subtitle="Tuesday, 30 September 2026 · Local demand is picking up this week."
+        subtitle="Manage your produce and review open requests from nearby buyers."
         action={
           <Link
             href="/farmer/demand"
@@ -964,79 +1027,27 @@ function FarmerDashboard({
           warm
         />
         <Metric
-          label="Confirmed earnings"
+          label="Completed earnings"
           value={money(earnings)}
-          helper="From accepted direct deals"
+          helper="From completed orders"
           icon={TrendingUp}
         />
       </div>
-      <div className="mt-5 grid gap-5 xl:grid-cols-[1.4fr_.9fr]">
+      <div className="mt-5 grid gap-5 lg:grid-cols-[1.4fr_.9fr]">
         <Section
-          eyebrow="Farm-gate price · Tomato"
-          title="A clearer view of your price"
-          action={<span className="tag tag-green">Demo estimate</span>}
+          eyebrow="Market information"
+          title="Price data not available yet"
         >
-          <div className="flex flex-wrap items-end justify-between gap-4">
-            <div>
-              <p className="text-[11px] text-[#748076]">
-                Suggested asking price
-              </p>
-              <p className="mt-1 font-serif text-[37px] leading-none text-[#315b3d]">
-                ₹27<span className="ml-1 text-xs text-[#788279]">/ kg</span>
-              </p>
-            </div>
-            <p className="text-xs font-semibold">
-              ₹23 – ₹31 / kg{" "}
-              <span className="block mt-1 text-[10px] font-normal text-[#849087]">
-                Reasonable range
-              </span>
-            </p>
-            <Link
-              href="/price-transparency"
-              className="text-[11px] font-semibold text-[#507b55]"
-            >
-              See price breakdown →
-            </Link>
-          </div>
-          <p className="mt-4 text-[11px] leading-5 text-[#768078]">
-            Nearby buyer demand is high and the asking price is below the local
-            reference. This is an explainable demo estimate, not a live quote.
+          <p className="text-sm leading-6 text-[#768078]">
+            KhetLink does not have a verified mandi price feed or historical
+            price records. Choose your asking price using information you trust.
           </p>
-          <div className="mt-5 h-[210px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={priceHistory}>
-                <CartesianGrid stroke="#edf0eb" vertical={false} />
-                <XAxis
-                  dataKey="date"
-                  tickLine={false}
-                  axisLine={false}
-                  tick={{ fill: "#89938a", fontSize: 9 }}
-                />
-                <YAxis
-                  tickLine={false}
-                  axisLine={false}
-                  tick={{ fill: "#89938a", fontSize: 9 }}
-                />
-                <Tooltip />
-                <Line
-                  dataKey="farmer"
-                  stroke="#4c8057"
-                  strokeWidth={2.5}
-                  dot={false}
-                />
-                <Line
-                  dataKey="market"
-                  stroke="#d7814f"
-                  strokeWidth={2}
-                  dot={false}
-                  strokeDasharray="5 4"
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-          <p className="text-[10px] text-[#788279]">
-            ● Farmer reference　 ● Local market reference
-          </p>
+          <Link
+            href="/price-transparency"
+            className="mt-4 inline-flex text-[11px] font-semibold text-[#507b55]"
+          >
+            View price data status →
+          </Link>
         </Section>
         <Section
           eyebrow="Ready to match"
@@ -1087,7 +1098,7 @@ function FarmerDashboard({
           )}
         </Section>
       </div>
-      <div className="mt-5 grid gap-5 lg:grid-cols-[1.2fr_.8fr]">
+      <div className="mt-5">
         <Section
           eyebrow="Available today"
           title="Your produce"
@@ -1101,24 +1112,6 @@ function FarmerDashboard({
           }
         >
           <ListingTable items={mine.slice(0, 4)} />
-        </Section>
-        <Section eyebrow="This week" title="Demand vs matched (kg)">
-          <div className="h-[220px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={demandTrend}>
-                <CartesianGrid stroke="#edf0eb" vertical={false} />
-                <XAxis
-                  dataKey="date"
-                  tickLine={false}
-                  axisLine={false}
-                  tick={{ fill: "#89938a", fontSize: 9 }}
-                />
-                <Tooltip />
-                <Bar dataKey="demand" fill="#dce8d4" radius={[3, 3, 0, 0]} />
-                <Bar dataKey="matched" fill="#58825b" radius={[3, 3, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
         </Section>
       </div>
     </>
@@ -1139,52 +1132,45 @@ function ListingForm({
   onCancel?: () => void;
 }) {
   const isFarmer = role === "farmer";
-  const [crop, setCrop] = useState(initial?.produce ?? "Tomato");
-  const [quantity, setQuantity] = useState(String(initial?.quantityKg ?? 500));
-  const [price, setPrice] = useState(
-    String(
-      initial
-        ? "askingPricePerKg" in initial
-          ? initial.askingPricePerKg
-          : initial.targetPricePerKg
-        : isFarmer
-          ? 25
-          : 29,
-    ),
+  const [crop, setCrop] = useState(initial?.produce ?? "");
+  const [quantity, setQuantity] = useState(
+    initial ? String(initial.quantityKg) : "",
   );
-  const [location, setLocation] = useState(initial?.location ?? "Greater Noida");
-  const [suggested, setSuggested] = useState(27);
+  const [price, setPrice] = useState(
+    initial
+      ? String(
+          "askingPricePerKg" in initial
+            ? initial.askingPricePerKg
+            : initial.targetPricePerKg,
+        )
+      : "",
+  );
+  const [location, setLocation] = useState(initial?.location ?? "");
   const [minimumDate] = useState(() => dateInputValue(0));
   const [date, setDate] = useState(
     initial
       ? "availableBy" in initial
         ? initial.availableBy
         : initial.requiredBy
-      : dateInputValue(isFarmer ? 2 : 5),
+      : "",
   );
-  useEffect(() => {
-    void recommendPrice({
-      produce: crop,
-      location,
-      quantityKg: Number(quantity) || 1,
-      askingPricePerKg: Number(price) || 1,
-      referenceMarketPrice: crop === "Tomato" ? 30 : 32,
-      demandQuantityKg: 800,
-    }).then((result) => setSuggested(result.recommendedPrice));
-  }, [crop, location, quantity, price]);
   return (
-    <form onSubmit={onSubmit} className="space-y-4">
+    <form onSubmit={onSubmit} className="listing-form">
       <div className="grid gap-4 sm:grid-cols-2">
         <label>
           <span className="field-label">Produce</span>
           <select
             name="produce"
             className="input-field"
+            required
             value={crop}
             onChange={(e) => setCrop(e.target.value)}
           >
+            <option value="" disabled>
+              Select produce
+            </option>
             {crops.map((item) => (
-              <option key={item}>{item}</option>
+              <option key={item} value={item}>{item}</option>
             ))}
           </select>
         </label>
@@ -1195,6 +1181,7 @@ function ListingForm({
           <input
             name="quantity"
             type="number"
+            inputMode="numeric"
             min="1"
             required
             value={quantity}
@@ -1209,6 +1196,7 @@ function ListingForm({
           <input
             name="price"
             type="number"
+            inputMode="decimal"
             min="1"
             step="0.5"
             required
@@ -1223,12 +1211,16 @@ function ListingForm({
           </span>
           <select
             name="location"
+            required
             value={location}
             onChange={(e) => setLocation(e.target.value)}
             className="input-field"
           >
+            <option value="" disabled>
+              Select a location
+            </option>
             {locations.map((item) => (
-              <option key={item}>{item}</option>
+              <option key={item} value={item}>{item}</option>
             ))}
           </select>
         </label>
@@ -1237,17 +1229,17 @@ function ListingForm({
             <span className="field-label">Buyer type</span>
             <select
               name="buyerType"
-              defaultValue={
-                initial && "buyerType" in initial
-                  ? initial.buyerType
-                  : "Restaurant"
-              }
+              defaultValue={initial && "buyerType" in initial ? initial.buyerType : ""}
               className="input-field"
+              required
             >
+              <option value="" disabled>
+                Select a buyer type
+              </option>
               {(
                 ["Retailer", "Restaurant", "Hostel", "Small business"] as const
               ).map((item) => (
-                <option key={item}>{item}</option>
+                <option key={item} value={item}>{item}</option>
               ))}
             </select>
           </label>
@@ -1267,35 +1259,26 @@ function ListingForm({
           />
         </label>
       </div>
-      {isFarmer && (
-        <div className="rounded-md border border-[#dce8d7] bg-[#f2f6ef] p-4">
-          <p className="text-xs font-semibold text-[#395f40]">
-            Suggested price{" "}
-            <span className="ml-1 font-serif text-xl">
-              {money(suggested)}/kg
-            </span>
-          </p>
-          <p className="mt-1.5 text-[10px] leading-5 text-[#718071]">
-            Deterministic mock estimate based on asking price, quantity and
-            local demand.
-          </p>
-        </div>
-      )}
-      <div className="flex flex-wrap gap-2">
-        <Button type="submit">
+      <div className="form-actions">
+        <Button type="submit" className="w-full sm:w-auto">
           {submitLabel ??
             (isFarmer ? "Publish produce listing" : "Post buyer demand")}
           <ArrowRight size={14} />
         </Button>
         {onCancel && (
-          <Button type="button" variant="secondary" onClick={onCancel}>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={onCancel}
+            className="w-full sm:w-auto"
+          >
             Cancel
           </Button>
         )}
       </div>
       <p className="text-[10px] leading-5 text-[#8a948b]">
-        All recommendations and listings are illustrative, not guaranteed market
-        quotes.
+        No verified market-price data is available. Enter a price based on
+        information you trust.
       </p>
     </form>
   );
@@ -1373,7 +1356,7 @@ function FarmerProduce({
         title="Your produce"
         subtitle="Show nearby buyers what you have available and the price that works for you."
       />
-      <div className="grid items-start gap-5 xl:grid-cols-[.9fr_1.1fr]">
+      <div className="grid items-start gap-5 lg:grid-cols-[.9fr_1.1fr]">
         <Section eyebrow="New listing" title="Add available produce">
           <ListingForm role="farmer" onSubmit={submit} />
         </Section>
@@ -1485,7 +1468,7 @@ function BuyerDemand({
         title="Post a demand"
         subtitle="Describe a bulk requirement. Nearby farmers can respond with available produce."
       />
-      <div className="grid items-start gap-5 xl:grid-cols-[.9fr_1.1fr]">
+      <div className="grid items-start gap-5 lg:grid-cols-[.9fr_1.1fr]">
         <Section eyebrow="Purchase request" title="What do you need?">
           {editing ? (
             <ListingForm
@@ -1800,7 +1783,12 @@ function AdminDashboard({
       </div>
       <Section eyebrow="Accounts" title="Registered users">
         {users.length ? (
-          <div className="table-scroll">
+          <div
+            role="region"
+            aria-label="Registered users"
+            tabIndex={0}
+            className="table-scroll"
+          >
             <table className="w-full min-w-[560px] text-left">
               <thead className="table-head">
                 <tr>
@@ -1850,7 +1838,12 @@ function AdminDashboard({
         </Section>
         <Section eyebrow="Marketplace demand" title="All buyer demands">
           {state.demands.length ? (
-            <div className="table-scroll">
+            <div
+              role="region"
+              aria-label="All buyer demands"
+              tabIndex={0}
+              className="table-scroll"
+            >
               <table className="w-full min-w-[620px] text-left">
                 <thead className="table-head">
                   <tr>
@@ -1889,7 +1882,12 @@ function AdminDashboard({
         </Section>
         <Section eyebrow="All activity" title="Platform orders">
           {state.deals.length ? (
-            <div className="table-scroll">
+            <div
+              role="region"
+              aria-label="Platform orders"
+              tabIndex={0}
+              className="table-scroll"
+            >
               <table className="w-full min-w-[620px] text-left">
                 <thead className="table-head">
                   <tr>
@@ -1931,97 +1929,87 @@ function Earnings({
   update: ReturnType<typeof usePlatform>["updateDealStatus"];
 }) {
   const deals = state.deals.filter(
-    (deal) => deal.farmerId === id && deal.status !== "pending",
+    (deal) => deal.farmerId === id,
   );
-  const earned = deals.reduce((sum, deal) => sum + deal.totalValue, 0);
+  const completedDeals = deals.filter((deal) => deal.status === "completed");
+  const earned = completedDeals.reduce((sum, deal) => sum + deal.totalValue, 0);
+  const completedVolume = completedDeals.reduce(
+    (sum, deal) => sum + deal.quantityKg,
+    0,
+  );
+  const averagePrice = completedDeals.length
+    ? `${money(
+        Math.round(
+          completedDeals.reduce(
+            (sum, deal) => sum + deal.agreedPricePerKg,
+            0,
+          ) / completedDeals.length,
+        ),
+      )}/kg`
+    : "Not available";
   return (
     <>
       <Heading
         eyebrow="Farmer workspace"
         title="Earnings overview"
-        subtitle="See confirmed direct-deal value alongside illustrative local price references."
+        subtitle="Earnings include completed orders only."
       />
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Metric
-          label="Confirmed deal value"
+          label="Completed earnings"
           value={money(earned)}
-          helper="Accepted agreements"
+          helper="From completed orders"
           icon={TrendingUp}
         />
         <Metric
-          label="Deals confirmed"
-          value={`${deals.length}`}
-          helper="Direct buyer agreements"
+          label="Completed orders"
+          value={`${completedDeals.length}`}
+          helper="Your completed orders"
           icon={Handshake}
         />
         <Metric
           label="Produce traded"
-          value={`${deals.reduce((sum, d) => sum + d.quantityKg, 0)} kg`}
-          helper="Accepted order volume"
+          value={`${completedVolume} kg`}
+          helper="Volume from completed orders"
           icon={Package}
         />
         <Metric
-          label="Average price"
-          value={`${money(deals.length ? Math.round(deals.reduce((sum, d) => sum + d.agreedPricePerKg, 0) / deals.length) : 25)}/kg`}
-          helper="Farm-gate deal price"
+          label="Average completed price"
+          value={averagePrice}
+          helper={
+            completedDeals.length
+              ? "Based on completed orders"
+              : "No completed orders yet"
+          }
           icon={BarChart3}
         />
       </div>
       <div className="mt-5 grid gap-5 lg:grid-cols-2">
         <Section
-          eyebrow="Illustrative weekly trend"
-          title="Price history · Tomato"
+          eyebrow="Market information"
+          title="Price history unavailable"
         >
-          <ChartPrice />
+          <p className="text-sm leading-6 text-[#768078]">
+            No verified mandi price feed or historical market-price records are
+            connected to KhetLink.
+          </p>
         </Section>
-        <Section eyebrow="Confirmed value" title="Deal earnings">
-          <div className="h-[280px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart
-                data={deals.map((deal, i) => ({
-                  name: `${deal.produce} ${i + 1}`,
-                  value: deal.totalValue,
-                }))}
-              >
-                <CartesianGrid stroke="#edf0eb" vertical={false} />
-                <XAxis dataKey="name" />
-                <Tooltip formatter={(v) => [money(Number(v)), "Deal value"]} />
-                <Bar dataKey="value" fill="#638d61" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+        <Section eyebrow="Your records" title="Order activity">
+          <p className="text-sm leading-6 text-[#768078]">
+            {completedDeals.length
+              ? `${completedDeals.length} completed ${
+                  completedDeals.length === 1 ? "order" : "orders"
+                } are included in these earnings.`
+              : "No completed orders found."}
+          </p>
         </Section>
       </div>
       <div className="mt-5">
-        <Section eyebrow="Your trade" title="Accepted deals">
+        <Section eyebrow="Your trade" title="Orders">
           <DealsTable items={deals} role="farmer" update={update} />
         </Section>
       </div>
     </>
-  );
-}
-function ChartPrice() {
-  return (
-    <div className="h-[280px]">
-      <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={priceHistory}>
-          <CartesianGrid stroke="#edf0eb" vertical={false} />
-          <XAxis dataKey="date" tick={{ fontSize: 10 }} />
-          <YAxis tick={{ fontSize: 10 }} />
-          <Tooltip />
-          <Legend />
-          <Line
-            name="Farmer"
-            dataKey="farmer"
-            stroke="#4c8057"
-            strokeWidth={2.5}
-            dot={false}
-          />
-          <Line name="Market" dataKey="market" stroke="#d7814f" dot={false} />
-          <Line name="Retail" dataKey="retail" stroke="#95a58a" dot={false} />
-        </LineChart>
-      </ResponsiveContainer>
-    </div>
   );
 }
 
@@ -2050,26 +2038,33 @@ function Marketplace({ state }: { state: PlatformState }) {
       <Heading
         eyebrow="Local discovery · NCR"
         title="Trade starts close by."
-        subtitle="Explore bulk buyer requests and available farm produce. This is a local demand board, not a consumer shopping app."
+        subtitle="Find nearby bulk buyers and see what local farmers have available."
       />
-      <div className="grid items-start gap-5 xl:grid-cols-[1.05fr_.95fr]">
+      <div className="grid items-start gap-5 lg:grid-cols-[1.05fr_.95fr]">
         <section>
-          <div className="mb-4 flex flex-wrap gap-2">
-            <div className="inline-flex rounded-md border border-[#e3e8e0] bg-white p-1">
+          <div className="marketplace-filters mb-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+            <div
+              role="group"
+              aria-label="Listing type"
+              className="inline-flex w-full rounded-md border border-[#e3e8e0] bg-white p-1 sm:w-auto"
+            >
               {(["demand", "supply"] as const).map((key) => (
                 <button
                   key={key}
+                  type="button"
+                  aria-pressed={tab === key}
                   onClick={() => setTab(key)}
-                  className={`rounded px-3 py-2 text-[11px] font-semibold capitalize ${tab === key ? "bg-[#315b3d] text-white" : "text-[#6f7b71]"}`}
+                  className={`flex-1 rounded px-3 py-2 text-[11px] font-semibold capitalize sm:flex-none ${tab === key ? "bg-[#315b3d] text-white" : "text-[#6f7b71]"}`}
                 >
                   {key === "demand" ? "Buyer demand" : "Available produce"}
                 </button>
               ))}
             </div>
             <select
+              aria-label="Filter by crop"
               value={crop}
               onChange={(e) => setCrop(e.target.value)}
-              className="input-field !h-[38px] !w-auto text-[11px]"
+              className="input-field !h-11 !w-full sm:!w-auto"
             >
               <option>All crops</option>
               {crops.map((x) => (
@@ -2079,16 +2074,17 @@ function Marketplace({ state }: { state: PlatformState }) {
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search crop or place"
-              className="input-field !h-[38px] min-w-[145px] flex-1 text-[11px] sm:max-w-[190px]"
+              aria-label="Search local listings"
+              placeholder="Search crop or location"
+              className="input-field !h-11 min-w-0 w-full sm:flex-1 sm:max-w-[240px]"
             />
           </div>
           <div className="space-y-3">
             {tab === "demand"
               ? demands.map((item) => (
                   <article key={item.id} className="panel p-4">
-                    <div className="flex justify-between gap-3">
-                      <div>
+                    <div className="flex flex-wrap justify-between gap-3">
+                      <div className="min-w-0 flex-1">
                         <span className="tag tag-amber">{item.buyerType}</span>
                         <h3 className="mt-2.5 text-sm font-semibold">
                           {item.buyerName}
@@ -2097,19 +2093,19 @@ function Marketplace({ state }: { state: PlatformState }) {
                           Looking for {item.quantityKg} kg <b>{item.produce}</b>
                         </p>
                       </div>
-                      <p className="whitespace-nowrap text-right text-xs font-semibold">
+                      <p className="shrink-0 whitespace-nowrap text-right text-xs font-semibold">
                         Up to {money(item.targetPricePerKg)}
                         <span className="mt-1 block text-[10px] font-normal text-[#7a857b]">
                           per kg
                         </span>
                       </p>
                     </div>
-                    <div className="mt-3 flex justify-between border-t border-[#edf0eb] pt-3 text-[10px] text-[#788279]">
-                      <span>
+                    <div className="mt-3 flex flex-wrap justify-between gap-x-3 gap-y-2 border-t border-[#edf0eb] pt-3 text-[10px] text-[#788279]">
+                      <span className="min-w-0">
                         <MapPin size={12} className="mr-1 inline" />
                         {item.location} · due {dayLabel(item.requiredBy)}
                       </span>
-                      <span>
+                      <span className="min-w-0">
                         {findFarmerMatches(item, state.produce).length} possible
                         matches
                       </span>
@@ -2118,8 +2114,8 @@ function Marketplace({ state }: { state: PlatformState }) {
                 ))
               : produce.map((item) => (
                   <article key={item.id} className="panel p-4">
-                    <div className="flex justify-between gap-3">
-                      <div>
+                    <div className="flex flex-wrap justify-between gap-3">
+                      <div className="min-w-0 flex-1">
                         <span className="tag tag-green">Available produce</span>
                         <h3 className="mt-2.5 text-sm font-semibold">
                           {item.farmerName}
@@ -2128,19 +2124,19 @@ function Marketplace({ state }: { state: PlatformState }) {
                           {item.quantityKg} kg <b>{item.produce}</b>
                         </p>
                       </div>
-                      <p className="whitespace-nowrap text-right text-xs font-semibold">
+                      <p className="shrink-0 whitespace-nowrap text-right text-xs font-semibold">
                         {money(item.askingPricePerKg)}
                         <span className="mt-1 block text-[10px] font-normal text-[#7a857b]">
                           per kg
                         </span>
                       </p>
                     </div>
-                    <div className="mt-3 flex justify-between border-t border-[#edf0eb] pt-3 text-[10px] text-[#788279]">
-                      <span>
+                    <div className="mt-3 flex flex-wrap justify-between gap-x-3 gap-y-2 border-t border-[#edf0eb] pt-3 text-[10px] text-[#788279]">
+                      <span className="min-w-0">
                         <MapPin size={12} className="mr-1 inline" />
                         {item.location} · available {dayLabel(item.availableBy)}
                       </span>
-                      <span>
+                      <span className="min-w-0">
                         {findDemandMatches(item, state.demands).length} possible
                         matches
                       </span>
@@ -2150,8 +2146,16 @@ function Marketplace({ state }: { state: PlatformState }) {
             {(tab === "demand" ? demands.length : produce.length) === 0 && (
               <div className="panel">
                 <Empty
-                  title="No local listings found"
-                  body="Try another crop or search term."
+                  title={
+                    search || crop !== "All crops"
+                      ? "No listings match these filters"
+                      : "No open listings found"
+                  }
+                  body={
+                    search || crop !== "All crops"
+                      ? "Try a different crop or search term."
+                      : "New Appwrite listings will appear here."
+                  }
                 />
               </div>
             )}
@@ -2160,17 +2164,14 @@ function Marketplace({ state }: { state: PlatformState }) {
         <aside className="panel overflow-hidden p-3">
           <div className="flex items-center justify-between px-2 pb-3 pt-1">
             <div>
-              <p className="eyebrow mb-1">OpenStreetMap</p>
-              <h2 className="text-sm font-semibold">Local supply & demand</h2>
+              <p className="eyebrow mb-1">Listing locations</p>
+              <h2 className="text-sm font-semibold">Location overview</h2>
             </div>
-            <span className="text-[10px] text-[#768078]">
-              ● farmers　● buyers
-            </span>
+            <span className="text-[10px] text-[#768078]">Names only</span>
           </div>
           <DemandMap demands={demands} produce={produce} />
           <p className="px-2 pt-3 text-[10px] leading-5 text-[#808a81]">
-            Map points are approximate city locations. Prices and volumes are
-            illustrative demo data.
+            No estimated map coordinates are used.
           </p>
         </aside>
       </div>
@@ -2179,249 +2180,87 @@ function Marketplace({ state }: { state: PlatformState }) {
 }
 
 function Transparency() {
-  const values = [
-    { name: "Farmer realization", value: 25 },
-    { name: "Local market reference", value: 30 },
-    { name: "Retail estimate", value: 38 },
-  ];
   return (
     <>
       <Heading
-        eyebrow="Know the numbers"
-        title="See the price, end to end."
-        subtitle="Illustrative tomato prices between the farm gate, local market and retail shelf."
-        action={<span className="tag tag-amber">Demo price data</span>}
+        eyebrow="Market information"
+        title="Price data not available yet."
+        subtitle="KhetLink does not have a verified mandi or retail price feed."
       />
-      <div className="grid gap-5 lg:grid-cols-[1.1fr_.9fr]">
-        <Section
-          eyebrow="Greater Noida · Tomato"
-          title="Estimated price per kg"
-        >
-          <div className="grid grid-cols-3 gap-3">
-            {values.map((item, i) => (
-              <div key={item.name} className="rounded-md bg-[#f7f8f4] p-3">
-                <p className="text-[10px] leading-4 text-[#748076]">
-                  {item.name}
-                </p>
-                <p
-                  className={`mt-2 font-serif text-[25px] ${i === 0 ? "text-[#58825b]" : i === 1 ? "text-[#d99a56]" : "text-[#879b78]"}`}
-                >
-                  {money(item.value)}
-                </p>
-                <p className="mt-1 text-[10px] text-[#89938a]">per kg</p>
-              </div>
-            ))}
-          </div>
-          <div className="mt-6 h-[260px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart
-                data={values}
-                layout="vertical"
-                margin={{ left: 12, right: 24 }}
-              >
-                <CartesianGrid stroke="#edf0eb" horizontal={false} />
-                <XAxis
-                  type="number"
-                  domain={[0, 42]}
-                  tickFormatter={(x) => `₹${x}`}
-                />
-                <YAxis
-                  type="category"
-                  dataKey="name"
-                  width={130}
-                  tick={{ fontSize: 10 }}
-                />
-                <Tooltip
-                  formatter={(v) => [money(Number(v)), "Estimated price"]}
-                />
-                <Bar dataKey="value" fill="#638d61" radius={[0, 4, 4, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </Section>
-        <Section eyebrow="Where value changes" title="The price gap, explained">
-          <div className="space-y-4">
-            {[
-              [
-                "1",
-                "At the farm gate · ₹25/kg",
-                "The estimated amount received by the farmer for a direct sale.",
-              ],
-              [
-                "2",
-                "Local market · ₹30/kg",
-                "A reference for sorting, aggregation, handling and market movement.",
-              ],
-              [
-                "3",
-                "Retail shelf · ₹38/kg",
-                "An indicative consumer price that may include transport, storage, wastage and retail costs.",
-              ],
-            ].map(([n, title, body]) => (
-              <div key={n} className="flex gap-3">
-                <span className="grid size-7 shrink-0 place-items-center rounded-full bg-[#edf3e9] text-[11px] font-bold text-[#4b7853]">
-                  {n}
-                </span>
-                <div>
-                  <p className="text-xs font-semibold">{title}</p>
-                  <p className="mt-1 text-[11px] leading-5 text-[#788279]">
-                    {body}
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
-          <div className="mt-5 rounded-md border border-[#e2e9de] bg-[#f4f7f1] p-3.5 text-[10px] leading-5 text-[#758078]">
-            Direct local trade may reduce avoidable handoffs. It does not remove
-            real handling, transport or retail costs.
-          </div>
-          <div className="mt-4 rounded-md border border-[#f0dfcd] bg-[#fbf5ee] p-3.5 text-[10px] leading-5 text-[#81694f]">
-            All prices shown are mock estimates, not live mandi or retail data.
-            No external price feed is connected.
-          </div>
-        </Section>
-      </div>
-      <div className="mt-5">
-        <Section
-          eyebrow="Mock history"
-          title="A week of local reference prices"
-        >
-          <ChartPrice />
-        </Section>
+      <div className="panel p-6">
+        <h2 className="section-title">No verified price records found</h2>
+        <p className="mt-3 max-w-2xl text-sm leading-6 text-[#768078]">
+          Produce asking prices and buyer target prices come from Appwrite
+          listings. They are user-entered offers, not official mandi prices.
+          Historical market data will appear here only after a trusted source
+          is connected.
+        </p>
       </div>
     </>
   );
 }
 
 function Impact({ state }: { state: PlatformState }) {
-  const volume = state.deals
-    .filter((deal) => deal.status !== "pending")
-    .reduce((sum, deal) => sum + deal.quantityKg, 18400);
-  const income = volume * 4.2;
-  const growth = [
-    { month: "Apr", farmers: 92, buyers: 38 },
-    { month: "May", farmers: 135, buyers: 57 },
-    { month: "Jun", farmers: 176, buyers: 75 },
-    { month: "Jul", farmers: 228, buyers: 98 },
-    { month: "Aug", farmers: 274, buyers: 121 },
-    { month: "Sep", farmers: 326, buyers: 148 },
-  ];
-  const volumes = [
-    { crop: "Tomato", kg: 4800 },
-    { crop: "Potato", kg: 3950 },
-    { crop: "Onion", kg: 3100 },
-    { crop: "Rice", kg: 2750 },
-    { crop: "Wheat", kg: 2300 },
-  ];
+  const metrics = state.metrics;
   return (
     <>
       <Heading
-        eyebrow="Platform impact · illustrative"
-        title="More value, closer to the farm."
-        subtitle="A demo view of local participants, matched deals, produce moving and potential farmer income retained."
-        action={<span className="tag tag-amber">Prototype estimates</span>}
+        eyebrow="Platform activity"
+        title="KhetLink activity from Appwrite."
+        subtitle="These totals are calculated from current farmer, buyer, listing, match, and completed order records."
       />
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
         <Metric
-          label="Farmers onboarded"
-          value="326"
-          helper="Across demo region"
+          label="Farmer profiles"
+          value={`${metrics.farmerCount}`}
+          helper={metrics.farmerCount ? "Appwrite farmer records" : "No records found"}
           icon={Sprout}
         />
         <Metric
-          label="Local buyers"
-          value="148"
-          helper="Restaurants, shops & more"
+          label="Buyer profiles"
+          value={`${metrics.buyerCount}`}
+          helper={metrics.buyerCount ? "Appwrite buyer records" : "No records found"}
           icon={Store}
         />
         <Metric
-          label="Matched deals"
-          value={`${42 + state.deals.filter((d) => d.status !== "pending").length}`}
-          helper="Confirmed agreements"
-          icon={Handshake}
-        />
-        <Metric
-          label="Produce volume"
-          value={`${volume.toLocaleString("en-IN")} kg`}
-          helper="Direct trade recorded"
+          label="Open produce listings"
+          value={`${metrics.activeProduceCount}`}
+          helper={metrics.activeProduceCount ? "Available to buyers" : "No records found"}
           icon={Package}
         />
         <Metric
-          label="Farmer price avg."
-          value="₹26/kg"
-          helper="Illustrative farm-gate"
-          icon={TrendingUp}
+          label="Open buyer demands"
+          value={`${metrics.activeDemandCount}`}
+          helper={metrics.activeDemandCount ? "Available to farmers" : "No records found"}
+          icon={ClipboardList}
         />
         <Metric
-          label="Market ref. avg."
-          value="₹31/kg"
-          helper="Illustrative reference"
-          icon={BarChart3}
-          warm
+          label="Accepted matches"
+          value={`${metrics.acceptedMatchCount}`}
+          helper={metrics.acceptedMatchCount ? "Stored match records" : "No records found"}
+          icon={Handshake}
+        />
+        <Metric
+          label="Completed orders"
+          value={`${metrics.completedOrderCount}`}
+          helper={metrics.completedOrderCount ? "Appwrite order records" : "No records found"}
+          icon={Package}
         />
       </div>
-      <div className="mt-5 grid gap-5 xl:grid-cols-2">
-        <Section
-          eyebrow="Local network growth"
-          title="More people finding each other"
-        >
-          <div className="h-[270px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={growth}>
-                <CartesianGrid stroke="#edf0eb" vertical={false} />
-                <XAxis dataKey="month" />
-                <Tooltip />
-                <Legend />
-                <Area
-                  name="Farmers"
-                  dataKey="farmers"
-                  stroke="#58825b"
-                  fill="#dce8d4"
-                />
-                <Area
-                  name="Buyers"
-                  dataKey="buyers"
-                  stroke="#d7814f"
-                  fill="#f8eee5"
-                />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        </Section>
-        <Section eyebrow="Local supply" title="Produce moved through matches">
-          <div className="h-[270px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={volumes} layout="vertical">
-                <CartesianGrid stroke="#edf0eb" horizontal={false} />
-                <XAxis type="number" />
-                <YAxis type="category" dataKey="crop" />
-                <Tooltip />
-                <Bar dataKey="kg" fill="#638d61" radius={[0, 4, 4, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </Section>
-      </div>
-      <div className="mt-5 grid gap-5 lg:grid-cols-[1.1fr_.9fr]">
-        <Section
-          eyebrow="Estimated farmer benefit"
-          title={`${money(income)} potential income retained`}
-        >
-          <p className="mt-3 text-[11px] leading-5 text-[#788279]">
-            Illustrative estimate: traded volume × an assumed ₹4.20/kg farm-gate
-            improvement. This is not measured platform impact or a guaranteed
-            farmer outcome.
+      <Section eyebrow="Completed trade" title="Produce volume">
+        <p className="font-serif text-[30px] text-[#315b3d]">
+          {metrics.completedOrderVolumeKg.toLocaleString("en-IN")} kg
+        </p>
+        <p className="mt-2 text-xs leading-5 text-[#788279]">
+          Total volume in completed Appwrite orders. No historical market-price
+          or farmer-income estimates are shown.
+        </p>
+        {!metrics.completedOrderCount && (
+          <p className="mt-4 text-xs font-semibold text-[#788279]">
+            No completed order records found.
           </p>
-        </Section>
-        <Section eyebrow="What we measure" title="Impact, made legible.">
-          <p className="text-[11px] leading-5 text-[#748076]">
-            Direct connections reduce unnecessary handoffs. Open price
-            references help participants negotiate with shared context. Matched
-            demand improves the odds produce finds a nearby buyer before losing
-            value.
-          </p>
-        </Section>
-      </div>
+        )}
+      </Section>
     </>
   );
 }
@@ -2435,7 +2274,6 @@ export default function PlatformApp({ route }: { route: string }) {
     loadError,
     syncState,
     refreshState,
-    signIn,
     signOut,
     addProduce,
     postDemand,
@@ -2451,22 +2289,18 @@ export default function PlatformApp({ route }: { route: string }) {
   const parts = route.split("/");
   const routeRole: UserRole =
     parts[0] === "admin" ? "admin" : parts[0] === "buyer" ? "buyer" : "farmer";
-  const name =
-    state.user?.name ??
-    (routeRole === "farmer" ? "Ravi Kumar" : "Green Table Kitchen");
+  const name = state.user?.name ?? "Visitor";
   const userId =
     state.user?.role === routeRole
       ? state.user.id
-      : routeRole === "farmer"
-        ? "farmer-demo"
-        : "buyer-demo";
+      : "";
   const requiresRole =
     route.startsWith("farmer/") ||
     route.startsWith("buyer/") ||
     route.startsWith("admin/");
 
   useEffect(() => {
-    if (!appwriteConfigured || !isReady || !requiresRole) return;
+    if (!isReady || loadError || !requiresRole) return;
     if (!state.user) {
       router.replace("/login");
     } else if (state.user.role !== routeRole) {
@@ -2478,13 +2312,12 @@ export default function PlatformApp({ route }: { route: string }) {
             : "/farmer/dashboard",
       );
     }
-  }, [isReady, requiresRole, routeRole, router, state.user]);
+  }, [isReady, loadError, requiresRole, routeRole, router, state.user]);
 
   useEffect(() => {
     if (previousRoute.current === route) return;
     previousRoute.current = route;
     if (
-      !appwriteConfigured ||
       !isReady ||
       !route ||
       route === "login" ||
@@ -2502,13 +2335,11 @@ export default function PlatformApp({ route }: { route: string }) {
     userName: string,
     email: string,
     register: boolean,
+    location: string,
+    buyerType: BuyerType | "",
   ) => {
-    if (!appwriteConfigured) {
-      signIn(role, userName, email);
-      return role;
-    }
     const remoteState = register
-      ? await createPlatformProfile(role, userName)
+      ? await createPlatformProfile(role, userName, location, buyerType)
       : await loadPlatformState(true);
     if (!remoteState.user) {
       throw new Error("The KhetLink profile could not be loaded.");
@@ -2516,44 +2347,39 @@ export default function PlatformApp({ route }: { route: string }) {
     syncState(remoteState);
     return remoteState.user.role;
   };
-  if (!route) return <Home />;
-  if (route === "login" || route === "register")
-    return <Auth register={route === "register"} onAuth={onAuth} />;
-  if (appwriteConfigured && requiresRole && !isReady) {
+  if (!isReady) {
     return (
       <main className="grid min-h-screen place-items-center text-sm text-[#667568]">
-        Loading your KhetLink workspace…
+        Loading KhetLink data…
       </main>
     );
   }
-  if (appwriteConfigured && requiresRole && loadError) {
+  if (loadError) {
     return (
       <main className="grid min-h-screen place-items-center p-5">
         <div className="panel max-w-lg p-8 text-center">
-          <h1 className="page-title text-[26px]">Could not load your workspace</h1>
+          <h1 className="page-title text-[26px]">KhetLink data is unavailable</h1>
           <p className="mt-3 text-sm text-[#778178]">{loadError}</p>
-          <div className="mt-5 flex flex-wrap justify-center gap-2">
-            <Button onClick={() => window.location.reload()}>Try again</Button>
-            <Button
-              variant="secondary"
-              onClick={async () => {
-                try {
-                  await signOut();
-                  router.replace("/login");
-                } catch (error) {
-                  toast.error(error instanceof Error ? error.message : "Could not sign out.");
-                }
-              }}
-            >
-              Sign out
-            </Button>
-          </div>
+          <p className="mt-3 text-xs leading-5 text-[#778178]">
+            Check the Appwrite endpoint, project, database, collection IDs, and
+            server API key configuration. No demo data is being shown.
+          </p>
+          <Button
+            className="mt-5"
+            onClick={() => {
+              void refreshState().catch(() => undefined);
+            }}
+          >
+            Try again
+          </Button>
         </div>
       </main>
     );
   }
+  if (!route) return <Home />;
+  if (route === "login" || route === "register")
+    return <Auth register={route === "register"} onAuth={onAuth} />;
   if (
-    appwriteConfigured &&
     requiresRole &&
     (!state.user || state.user.role !== routeRole)
   ) {
@@ -2580,7 +2406,7 @@ export default function PlatformApp({ route }: { route: string }) {
       <Workspace
         route={route}
         role="admin"
-        name={state.user?.name ?? "Platform Admin"}
+        name={name}
         signOut={signOut}
       >
         <Impact state={state} />
@@ -2591,7 +2417,7 @@ export default function PlatformApp({ route }: { route: string }) {
       <Workspace
         route={route}
         role="farmer"
-        name={state.user?.name ?? "Ravi Kumar"}
+        name={name}
         signOut={signOut}
       >
         <FarmerDashboard state={state} userId={userId} />
@@ -2602,7 +2428,7 @@ export default function PlatformApp({ route }: { route: string }) {
       <Workspace
         route={route}
         role="buyer"
-        name={state.user?.name ?? "Green Table Kitchen"}
+        name={name}
         signOut={signOut}
       >
         <BuyerDashboard
@@ -2617,13 +2443,13 @@ export default function PlatformApp({ route }: { route: string }) {
       <Workspace
         route={route}
         role="farmer"
-        name={state.user?.name ?? "Ravi Kumar"}
+        name={name}
         signOut={signOut}
       >
         <FarmerProduce
           state={state}
           id={userId}
-          name={state.user?.name ?? "Ravi Kumar"}
+          name={state.user?.name ?? ""}
           add={addProduce}
           update={updateProduce}
           close={closeProduce}
@@ -2635,13 +2461,13 @@ export default function PlatformApp({ route }: { route: string }) {
       <Workspace
         route={route}
         role="buyer"
-        name={state.user?.name ?? "Green Table Kitchen"}
+        name={name}
         signOut={signOut}
       >
         <BuyerDemand
           state={state}
           id={userId}
-          name={state.user?.name ?? "Green Table Kitchen"}
+          name={state.user?.name ?? ""}
           post={postDemand}
           update={updateDemand}
           close={closeDemand}
@@ -2653,7 +2479,7 @@ export default function PlatformApp({ route }: { route: string }) {
       <Workspace
         route={route}
         role="farmer"
-        name={state.user?.name ?? "Ravi Kumar"}
+        name={name}
         signOut={signOut}
       >
         <Matches state={state} role="farmer" id={userId} accept={acceptMatch} />
@@ -2664,7 +2490,7 @@ export default function PlatformApp({ route }: { route: string }) {
       <Workspace
         route={route}
         role="buyer"
-        name={state.user?.name ?? "Green Table Kitchen"}
+        name={name}
         signOut={signOut}
       >
         <Matches state={state} role="buyer" id={userId} accept={acceptMatch} />
@@ -2686,7 +2512,7 @@ export default function PlatformApp({ route }: { route: string }) {
       <Workspace
         route={route}
         role="farmer"
-        name={state.user?.name ?? "Ravi Kumar"}
+        name={name}
         signOut={signOut}
       >
         <Earnings state={state} id={userId} update={updateDealStatus} />
@@ -2697,7 +2523,7 @@ export default function PlatformApp({ route }: { route: string }) {
       <Workspace
         route={route}
         role="admin"
-        name={state.user?.name ?? "Platform Admin"}
+        name={name}
         signOut={signOut}
       >
         <AdminDashboard
@@ -2741,23 +2567,27 @@ function BuyerDashboard({
     (item) => item.buyerId === userId && item.status === "open" && item.quantityKg > 0,
   );
   const deals = state.deals.filter((item) => item.buyerId === userId);
+  const completedDeals = deals.filter((item) => item.status === "completed");
   const matches = demands.reduce(
     (sum, item) => sum + findFarmerMatches(item, state.produce).length,
     0,
   );
-  const purchases = deals
-    .filter((item) => item.status !== "pending")
+  const purchases = completedDeals
     .reduce((sum, item) => sum + item.totalValue, 0);
-  const average = deals.length
-    ? Math.round(
-        deals.reduce((sum, item) => sum + item.agreedPricePerKg, 0) /
-          deals.length,
+  const average = completedDeals.length
+    ? money(
+        Math.round(
+          completedDeals.reduce(
+            (sum, item) => sum + item.agreedPricePerKg,
+            0,
+          ) / completedDeals.length,
+        ),
       )
-    : 27;
+    : null;
   return (
     <>
       <Heading
-        eyebrow="Buyer workspace · NCR"
+        eyebrow={`Buyer workspace · ${state.user?.location ?? "Location unavailable"}`}
         title="Good sourcing starts here."
         subtitle="Your open requests are visible to nearby growers."
         action={
@@ -2791,13 +2621,13 @@ function BuyerDashboard({
           warm
         />
         <Metric
-          label="Total purchases"
+          label="Completed purchases"
           value={money(purchases)}
-          helper="Confirmed direct orders"
+          helper="From completed orders"
           icon={TrendingUp}
         />
       </div>
-      <div className="mt-5 grid gap-5 xl:grid-cols-[1.2fr_.8fr]">
+      <div className="mt-5 grid gap-5 lg:grid-cols-[1.2fr_.8fr]">
         <Section
           eyebrow="Demand board"
           title="Your active requests"
@@ -2855,36 +2685,29 @@ function BuyerDashboard({
             />
           )}
         </Section>
-        <Section eyebrow="Your sourcing" title="Price paid per kg">
-          <p className="font-serif text-[34px] text-[#315b3d]">
-            {money(average)}
-            <span className="ml-1 text-xs text-[#788279]">
-              average direct price
-            </span>
-          </p>
-          <p className="mt-2 text-[11px] leading-5 text-[#7a857b]">
-            Demo estimate from confirmed orders and open listings.
-          </p>
-          <div className="mt-4 h-[185px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={priceHistory}>
-                <CartesianGrid stroke="#edf0eb" vertical={false} />
-                <XAxis dataKey="date" tick={{ fontSize: 9 }} />
-                <Tooltip />
-                <Area
-                  dataKey="farmer"
-                  stroke="#58825b"
-                  fill="#dce8d4"
-                  strokeWidth={2}
-                />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
+        <Section eyebrow="Your completed orders" title="Average price paid">
+          {average ? (
+            <>
+              <p className="font-serif text-[34px] text-[#315b3d]">
+                {average}
+                <span className="ml-1 text-xs text-[#788279]">per kg</span>
+              </p>
+              <p className="mt-2 text-[11px] leading-5 text-[#7a857b]">
+                Calculated from your completed Appwrite orders. This is not a
+                market-price estimate.
+              </p>
+            </>
+          ) : (
+            <p className="text-sm leading-6 text-[#768078]">
+              No completed orders found. Verified market-price data is not
+              available yet.
+            </p>
+          )}
           <Link
             href="/price-transparency"
-            className="text-[11px] font-semibold text-[#507b55]"
+            className="mt-4 inline-flex text-[11px] font-semibold text-[#507b55]"
           >
-            Compare local prices →
+            View price data status →
           </Link>
         </Section>
       </div>

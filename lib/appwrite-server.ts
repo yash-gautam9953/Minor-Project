@@ -14,6 +14,7 @@ import type {
   UserProfile,
   UserRole,
 } from "@/types";
+import { calculatePlatformMetrics } from "@/services/platform-metrics";
 
 const collectionNames = [
   "users",
@@ -351,42 +352,63 @@ async function loadState(
         name: adminAccount.name,
         email: adminAccount.email,
         role: "admin" as const,
-        location: "Greater Noida",
+        location: "",
       }
     : userId
       ? await getProfile(userId)
       : null;
-  const [userDocuments, farmerDocuments, buyerDocuments, produceDocuments, demandDocuments, dealDocuments] = await Promise.all([
+  const [
+    userDocuments,
+    farmerDocuments,
+    buyerDocuments,
+    produceDocuments,
+    demandDocuments,
+    matchDocuments,
+    dealDocuments,
+  ] = await Promise.all([
     adminAccount ? listDocuments("users") : Promise.resolve([]),
-    userId ? listDocuments("farmers") : Promise.resolve([]),
-    userId ? listDocuments("buyers") : Promise.resolve([]),
+    listDocuments("farmers"),
+    listDocuments("buyers"),
     listDocuments("produce"),
     listDocuments("demands"),
-    userId ? listDocuments("orders") : Promise.resolve([]),
+    listDocuments("matches"),
+    listDocuments("orders"),
   ]);
+  const allFarmers = farmerDocuments.map(toFarmerProfile);
+  const allBuyers = buyerDocuments.map(toBuyerProfile);
+  const allProduce = produceDocuments.map(toProduceListing);
+  const allDemands = demandDocuments.map(toDemandListing);
+  const allDeals = dealDocuments.map(toDeal);
+  const metrics = calculatePlatformMetrics({
+    farmers: allFarmers,
+    buyers: allBuyers,
+    produce: allProduce,
+    demands: allDemands,
+    deals: allDeals,
+    acceptedMatchCount: matchDocuments.length,
+  });
 
   return {
     user: profile,
-    farmers: farmerDocuments.map(toFarmerProfile),
-    buyers: buyerDocuments.map(toBuyerProfile),
-    produce: produceDocuments
-      .map(toProduceListing)
+    farmers: userId ? allFarmers : [],
+    buyers: userId ? allBuyers : [],
+    produce: allProduce
       .filter(
         (listing) =>
           Boolean(userId) || (listing.status === "open" && listing.quantityKg > 0),
       ),
-    demands: demandDocuments
-      .map(toDemandListing)
+    demands: allDemands
       .filter(
         (demand) =>
           Boolean(userId) || (demand.status === "open" && demand.quantityKg > 0),
       ),
-    deals: dealDocuments.map(toDeal).filter(
+    deals: allDeals.filter(
       (deal) =>
         Boolean(adminAccount) ||
         deal.farmerId === userId ||
         deal.buyerId === userId,
     ),
+    metrics,
     ...(adminAccount
       ? {
           adminUsers: userDocuments.map((document) => {
@@ -505,6 +527,8 @@ async function createProfile(
   user: AuthenticatedUser,
   role: UserRole,
   submittedName: unknown,
+  submittedLocation: unknown,
+  submittedBuyerType: unknown,
 ) {
   if (role !== "farmer" && role !== "buyer") {
     throw new PlatformApiError("New accounts must be farmers or buyers.", 400);
@@ -519,7 +543,7 @@ async function createProfile(
   }
 
   const displayName = stringValue(user.name || submittedName, "Name");
-  const location = "Greater Noida";
+  const location = assertLocation(submittedLocation);
   await withTransaction(async (transactionId) => {
     await databases.createDocument({
       databaseId,
@@ -547,7 +571,7 @@ async function createProfile(
           location,
           phone: "",
           verified: false,
-          rating: 5,
+          rating: 0,
         },
         transactionId,
       });
@@ -559,7 +583,7 @@ async function createProfile(
         data: {
           id: user.$id,
           name: displayName,
-          buyerType: "Restaurant",
+          buyerType: assertBuyerType(submittedBuyerType),
           location,
           phone: "",
         },
@@ -1003,6 +1027,8 @@ export async function handlePlatformAction(
       account,
       body.role,
       body.name,
+      body.location,
+      body.buyerType,
     );
   }
 

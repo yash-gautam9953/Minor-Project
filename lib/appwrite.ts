@@ -6,9 +6,7 @@ import type { PlatformState, UserRole } from "@/types";
 const endpoint = process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT;
 const projectId = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID;
 
-export const appwriteConfigured = Boolean(endpoint && projectId);
-
-const client = appwriteConfigured
+const client = endpoint && projectId
   ? new Client().setEndpoint(endpoint!).setProject(projectId!)
   : null;
 
@@ -76,11 +74,18 @@ export function loadPlatformState(authenticated: boolean) {
   return callPlatformApi<PlatformState>("GET", undefined, authenticated);
 }
 
-export function createPlatformProfile(role: UserRole, name: string) {
+export function createPlatformProfile(
+  role: UserRole,
+  name: string,
+  location: string,
+  buyerType: string,
+) {
   return callPlatformApi<PlatformState>("POST", {
     action: "createProfile",
     role,
     name,
+    location,
+    buyerType,
   });
 }
 

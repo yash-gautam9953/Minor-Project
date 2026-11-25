@@ -68,11 +68,14 @@ export interface Deal {
   createdAt: string;
 }
 
-export interface PricePoint {
-  date: string;
-  farmer: number;
-  market: number;
-  retail: number;
+export interface PlatformMetrics {
+  farmerCount: number;
+  buyerCount: number;
+  activeProduceCount: number;
+  activeDemandCount: number;
+  acceptedMatchCount: number;
+  completedOrderCount: number;
+  completedOrderVolumeKg: number;
 }
 
 export interface PlatformState {
@@ -82,6 +85,7 @@ export interface PlatformState {
   produce: ProduceListing[];
   demands: DemandListing[];
   deals: Deal[];
+  metrics: PlatformMetrics;
   adminUsers?: AdminUser[];
 }
 
@@ -99,7 +103,6 @@ export interface PlatformActions {
   loadError: string | null;
   syncState: (state: PlatformState) => void;
   refreshState: () => Promise<void>;
-  signIn: (role: UserRole, name?: string, email?: string) => void;
   signOut: () => Promise<void>;
   addProduce: (listing: Omit<ProduceListing, "id" | "status">) => Promise<void>;
   postDemand: (demand: Omit<DemandListing, "id" | "status">) => Promise<void>;
