@@ -21,8 +21,10 @@ import type {
 } from "@/types";
 import { calculatePlatformMetrics } from "@/services/platform-metrics";
 import {
+  canViewFarmerPickupAddress,
   canViewDemandDeliveryAddress,
   canViewOrderDeliveryAddress,
+  canViewOrderPickupAddress,
   calculateRiderFee,
   canRiderAdvanceDelivery,
   omitDemandDeliveryAddress,
@@ -224,6 +226,7 @@ function toFarmerProfile(document: DocumentRecord): FarmerProfile {
     name: requiredString(data, "name"),
     location: requiredString(data, "location"),
     phone: "",
+    pickupAddress: optionalString(data, "pickupAddress"),
     verified: data.verified,
     rating: requiredNumber(data, "rating"),
   };
@@ -329,6 +332,7 @@ function toDeal(document: DocumentRecord): Deal {
     farmerId: requiredString(data, "farmerId"),
     farmerName: requiredString(data, "farmerName"),
     farmerLocation: optionalString(data, "farmerLocation"),
+    pickupAddress: optionalString(data, "pickupAddress"),
     buyerId: requiredString(data, "buyerId"),
     buyerName: requiredString(data, "buyerName"),
     deliveryAddress: optionalString(data, "deliveryAddress"),
@@ -452,7 +456,24 @@ async function loadState(
   const allBuyers = buyerDocuments.map(toBuyerProfile);
   const allProduce = produceDocuments.map(toProduceListing);
   const allDemands = demandDocuments.map(toDemandListing);
-  const allDeals = dealDocuments.map(toDeal);
+  const pickupAddressesByFarmer = new Map<string, string | null>(
+    allFarmers.map(
+      (farmer): [string, string | null] => [
+        farmer.id,
+        farmer.pickupAddress ?? null,
+      ],
+    ),
+  );
+  const allDeals = dealDocuments.map((document) => {
+    const deal = toDeal(document);
+    return {
+      ...deal,
+      pickupAddress:
+        deal.pickupAddress?.trim() ||
+        pickupAddressesByFarmer.get(deal.farmerId) ||
+        null,
+    };
+  });
   const allRiders: RiderProfile[] = adminAccount
     ? userDocuments.flatMap((document) => {
         const data = documentFields(document);
@@ -482,7 +503,13 @@ async function loadState(
   return {
     user: profile,
     farmers:
-      userId && !adminAccount && profile?.role !== "rider" ? allFarmers : [],
+      userId && !adminAccount && profile?.role !== "rider"
+        ? allFarmers.map((farmer) =>
+            canViewFarmerPickupAddress(farmer, profile?.role ?? null, userId)
+              ? farmer
+              : { ...farmer, pickupAddress: null },
+          )
+        : [],
     buyers:
       userId && !adminAccount && profile?.role !== "rider" ? allBuyers : [],
     riders: allRiders,
@@ -503,17 +530,31 @@ async function loadState(
           ? demand
           : omitDemandDeliveryAddress(demand),
       ),
-    deals: allDeals.filter(
-      (deal) =>
-        Boolean(adminAccount) ||
-        deal.farmerId === userId ||
-        deal.buyerId === userId ||
-        (profile?.role === "rider" && deal.riderId === userId),
-    ).map((deal) =>
-      canViewOrderDeliveryAddress(deal, profile?.role ?? null, userId)
-        ? deal
-        : { ...deal, deliveryAddress: null },
-    ),
+    deals: allDeals
+      .filter(
+        (deal) =>
+          Boolean(adminAccount) ||
+          deal.farmerId === userId ||
+          deal.buyerId === userId ||
+          (profile?.role === "rider" && deal.riderId === userId),
+      )
+      .map((deal) => ({
+        ...deal,
+        pickupAddress: canViewOrderPickupAddress(
+          deal,
+          profile?.role ?? null,
+          userId,
+        )
+          ? deal.pickupAddress ?? null
+          : null,
+        deliveryAddress: canViewOrderDeliveryAddress(
+          deal,
+          profile?.role ?? null,
+          userId,
+        )
+          ? deal.deliveryAddress ?? null
+          : null,
+      })),
     metrics,
   };
 }
@@ -685,9 +726,42 @@ async function createProfile(
   return loadState(user.$id);
 }
 
+async function updateFarmPickupAddress(
+  user: UserProfile,
+  body: Record<string, unknown>,
+) {
+  if (user.role !== "farmer") {
+    throw new PlatformApiError("Only farmers can update a farm pickup address.", 403);
+  }
+  const pickupAddress = stringValue(body.pickupAddress, "Farm pickup address", 512);
+  const { databases, databaseId } = getDatabases();
+  await withTransaction(async (transactionId) => {
+    const document = await getDocument("farmers", user.id, transactionId);
+    const farmer = toFarmerProfile(document);
+    if (farmer.id !== user.id) {
+      throw new PlatformApiError("You can only update your own farm address.", 403);
+    }
+    await databases.updateDocument({
+      databaseId,
+      collectionId: getCollectionId("farmers"),
+      documentId: farmer.id,
+      data: { pickupAddress },
+      transactionId,
+    });
+  });
+  return loadState(user.id);
+}
+
 async function addProduce(user: UserProfile, body: Record<string, unknown>) {
   if (user.role !== "farmer") {
     throw new PlatformApiError("Only farmer accounts can publish produce.", 403);
+  }
+  const farmer = toFarmerProfile(await getDocument("farmers", user.id));
+  if (!farmer.pickupAddress?.trim()) {
+    throw new PlatformApiError(
+      "Save your farm pickup address in My produce before publishing a listing.",
+      409,
+    );
   }
   const { databases, databaseId } = getDatabases();
   const documentId = ID.unique();
@@ -910,6 +984,9 @@ async function acceptMatch(
     ]);
     const demand = toDemandListing(demandDocument);
     const produce = toProduceListing(produceDocument);
+    const farmer = toFarmerProfile(
+      await getDocument("farmers", produce.farmerId, transactionId),
+    );
     const ownsDemand = user.role === "buyer" && demand.buyerId === user.id;
     const ownsProduce = user.role === "farmer" && produce.farmerId === user.id;
     if (!ownsDemand && !ownsProduce) {
@@ -919,6 +996,12 @@ async function acceptMatch(
     if (!demand.deliveryAddress) {
       throw new PlatformApiError(
         "Add a delivery address to this demand before accepting the match.",
+        409,
+      );
+    }
+    if (!farmer.pickupAddress?.trim()) {
+      throw new PlatformApiError(
+        "Ask the farmer to save a farm pickup address before accepting the match.",
         409,
       );
     }
@@ -940,6 +1023,7 @@ async function acceptMatch(
       farmerId: produce.farmerId,
       farmerName: produce.farmerName,
       farmerLocation: produce.location,
+      pickupAddress: farmer.pickupAddress,
       buyerId: demand.buyerId,
       buyerName: demand.buyerName,
       deliveryAddress: demand.deliveryAddress,
@@ -1106,8 +1190,19 @@ async function adminAssignRider(body: Record<string, unknown>) {
   await withTransaction(async (transactionId) => {
     const document = await getDocument("orders", dealId, transactionId);
     const deal = toDeal(document);
+    const farmer = toFarmerProfile(
+      await getDocument("farmers", deal.farmerId, transactionId),
+    );
+    const pickupAddress =
+      deal.pickupAddress?.trim() || farmer.pickupAddress?.trim();
     if (deal.paymentStatus !== "simulated_paid") {
       throw new PlatformApiError("Only paid demo orders can be assigned for delivery.", 409);
+    }
+    if (!pickupAddress) {
+      throw new PlatformApiError(
+        "Ask the farmer to save a farm pickup address before assigning a rider.",
+        409,
+      );
     }
     if (!deal.deliveryAddress?.trim()) {
       throw new PlatformApiError("This order has no delivery address and cannot be assigned.", 409);
@@ -1120,6 +1215,7 @@ async function adminAssignRider(body: Record<string, unknown>) {
       collectionId: getCollectionId("orders"),
       documentId: dealId,
       data: {
+        pickupAddress,
         riderId: rider.id,
         riderName: rider.name,
         distanceKm,
@@ -1215,6 +1311,8 @@ export async function handlePlatformAction(
 
   const user = await getProfile(account.$id);
   switch (body.action) {
+    case "updateFarmPickupAddress":
+      return updateFarmPickupAddress(user, body);
     case "addProduce":
       return addProduce(user, body);
     case "postDemand":

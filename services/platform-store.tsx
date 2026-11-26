@@ -101,6 +101,17 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
     [],
   );
 
+  const updateFarmPickupAddress = useCallback<
+    PlatformActions["updateFarmPickupAddress"]
+  >(
+    async (pickupAddress) => {
+      setState(
+        await runPlatformAction("updateFarmPickupAddress", { pickupAddress }),
+      );
+    },
+    [],
+  );
+
   const postDemand = useCallback<PlatformActions["postDemand"]>(
     async (demand) => {
       setState(await runPlatformAction("postDemand", demand));
@@ -207,6 +218,7 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
       refreshState,
       signOut,
       addProduce,
+      updateFarmPickupAddress,
       postDemand,
       updateProduce,
       updateDemand,
@@ -226,6 +238,7 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
       refreshState,
       signOut,
       addProduce,
+      updateFarmPickupAddress,
       postDemand,
       updateProduce,
       updateDemand,

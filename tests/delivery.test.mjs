@@ -19,7 +19,9 @@ runInNewContext(javascript, {
 });
 const {
   calculateRiderFee,
+  canViewFarmerPickupAddress,
   canRiderAdvanceDelivery,
+  canViewOrderPickupAddress,
   canViewDemandDeliveryAddress,
   canViewOrderDeliveryAddress,
   omitDemandDeliveryAddress,
@@ -65,6 +67,19 @@ test("delivery addresses are visible only to the buyer, admin, and assigned ride
     canViewDemandDeliveryAddress({ buyerId: "buyer-1" }, "farmer", "farmer-1"),
     false,
   );
+});
+
+test("farm pickup addresses are visible only to the farmer, admin, and assigned rider", () => {
+  const farmer = { id: "farmer-1" };
+  const order = { farmerId: "farmer-1", riderId: "rider-1" };
+
+  assert.equal(canViewFarmerPickupAddress(farmer, "farmer", "farmer-1"), true);
+  assert.equal(canViewFarmerPickupAddress(farmer, "farmer", "farmer-2"), false);
+  assert.equal(canViewOrderPickupAddress(order, "buyer", "buyer-1"), false);
+  assert.equal(canViewOrderPickupAddress(order, "farmer", "farmer-1"), true);
+  assert.equal(canViewOrderPickupAddress(order, "rider", "rider-1"), true);
+  assert.equal(canViewOrderPickupAddress(order, "rider", "rider-2"), false);
+  assert.equal(canViewOrderPickupAddress(order, "admin"), true);
 });
 
 test("redacted demand addresses are omitted from JSON responses", () => {

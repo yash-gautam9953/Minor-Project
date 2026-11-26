@@ -1637,6 +1637,7 @@ function FarmerProduce({
   id,
   name,
   add,
+  updatePickupAddress,
   update,
   close,
 }: {
@@ -1644,13 +1645,38 @@ function FarmerProduce({
   id: string;
   name: string;
   add: ReturnType<typeof usePlatform>["addProduce"];
+  updatePickupAddress: ReturnType<typeof usePlatform>["updateFarmPickupAddress"];
   update: ReturnType<typeof usePlatform>["updateProduce"];
   close: ReturnType<typeof usePlatform>["closeProduce"];
 }) {
   const items = state.produce.filter((item) => item.farmerId === id);
+  const currentPickupAddress =
+    state.farmers.find((farmer) => farmer.id === id)?.pickupAddress ?? "";
+  const [pickupAddressDraft, setPickupAddressDraft] = useState<string>();
+  const pickupAddress = pickupAddressDraft ?? currentPickupAddress;
+  const [pickupAddressSaving, setPickupAddressSaving] = useState(false);
   const [editing, setEditing] = useState<PlatformState["produce"][number] | null>(null);
+
+  const savePickupAddress = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setPickupAddressSaving(true);
+    try {
+      await updatePickupAddress(pickupAddress);
+      setPickupAddressDraft(undefined);
+      toast.success("Farm pickup address saved");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not save the farm address.");
+    } finally {
+      setPickupAddressSaving(false);
+    }
+  };
+
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!currentPickupAddress.trim()) {
+      toast.error("Save your farm pickup address before publishing produce.");
+      return;
+    }
     const form = new FormData(event.currentTarget);
     const produce = String(form.get("produce"));
     const quantityKg = Number(form.get("quantity"));
@@ -1704,6 +1730,28 @@ function FarmerProduce({
         title="Your produce"
         subtitle="Show nearby buyers what you have available and the price that works for you."
       />
+      <Section eyebrow="Delivery pickup" title="Farm pickup address">
+        <form onSubmit={savePickupAddress} className="space-y-3">
+          <label className="block">
+            <span className="field-label">Full farm pickup address</span>
+            <textarea
+              className="input-field min-h-20 resize-y"
+              value={pickupAddress}
+              onChange={(event) => setPickupAddressDraft(event.target.value)}
+              maxLength={512}
+              placeholder="Farm/building, street, area, landmark, PIN code"
+              required
+            />
+          </label>
+          <p className="text-[10px] leading-5 text-[#849087]">
+            The address is shared with the admin and assigned rider for pickup.
+            It is not shown to buyers or on public listings.
+          </p>
+          <Button type="submit" disabled={pickupAddressSaving}>
+            {pickupAddressSaving ? "Saving address…" : "Save pickup address"}
+          </Button>
+        </form>
+      </Section>
       <div className="grid items-start gap-5 lg:grid-cols-[.9fr_1.1fr]">
         <Section eyebrow="New listing" title="Add available produce">
           <ListingForm role="farmer" onSubmit={submit} />
@@ -2142,10 +2190,10 @@ function AdminOrders({ deals }: { deals: Deal[] }) {
     <Section eyebrow="Order review" title="All orders">
       {deals.length ? (
         <div role="region" aria-label="All orders" tabIndex={0} className="table-scroll">
-          <table className="w-full min-w-[820px] text-left">
+          <table className="w-full min-w-[1100px] text-left">
             <thead className="table-head">
               <tr>
-                {["Order", "Farmer", "Buyer", "Delivery address", "Order value", "Rider fee", "Delivery"].map((item) => (
+                {["Order", "Farmer", "Buyer", "Farm pickup address", "Buyer delivery address", "Order value", "Rider fee", "Delivery"].map((item) => (
                   <th key={item} className="px-4 py-3 font-semibold">{item}</th>
                 ))}
               </tr>
@@ -2164,6 +2212,9 @@ function AdminOrders({ deals }: { deals: Deal[] }) {
                     <span className="mt-1 block text-[10px] text-[#859087]">{deal.farmerLocation || "Farm location unavailable"}</span>
                   </td>
                   <td className="px-4 py-3.5">{deal.buyerName}</td>
+                  <td className="max-w-[240px] px-4 py-3.5 whitespace-normal">
+                    {deal.pickupAddress || "Pickup address not saved"}
+                  </td>
                   <td className="max-w-[240px] px-4 py-3.5 whitespace-normal">
                     {deal.deliveryAddress || "Address not available"}
                   </td>
@@ -2288,7 +2339,8 @@ function AdminDeliveryCard({
         <DeliveryProgress deal={deal} />
       </div>
       <div className="mt-4 grid gap-3 rounded-md bg-white p-3 text-xs sm:grid-cols-2">
-        <Info label="Pickup location" value={deal.farmerLocation || "Unavailable"} />
+        <Info label="Farm pickup address" value={deal.pickupAddress || "Missing — cannot assign"} />
+        <Info label="Farmer location" value={deal.farmerLocation || "Unavailable"} />
         <Info label="Buyer delivery address" value={deal.deliveryAddress || "Missing — cannot assign"} />
       </div>
       {deliveryStatus === "awaiting_assignment" ? (
@@ -2351,6 +2403,7 @@ function AdminDeliveryCard({
               disabled={
                 busy ||
                 !riders.length ||
+                !deal.pickupAddress?.trim() ||
                 !deal.deliveryAddress?.trim()
               }
               aria-busy={busy}
@@ -2465,7 +2518,7 @@ function RiderDeliveryCard({
         <DeliveryProgress deal={deal} />
       </div>
       <div className="mt-4 grid gap-3 rounded-md bg-white p-3 text-xs sm:grid-cols-2">
-        <Info label="Pickup from farmer" value={`${deal.farmerName} · ${deal.farmerLocation || "Location unavailable"}`} />
+        <Info label="Pickup from farmer" value={`${deal.farmerName} · ${deal.pickupAddress || "Address unavailable"}`} />
         <Info label="Deliver to buyer" value={`${deal.buyerName} · ${deal.deliveryAddress || "Address unavailable"}`} />
         <Info label="Route distance" value={deal.distanceKm == null ? "Unavailable" : `${deal.distanceKm} km`} />
         <Info label="Rate" value={deal.riderRatePerKm == null ? "Unavailable" : `${money(deal.riderRatePerKm)}/km`} />
@@ -2841,6 +2894,7 @@ export default function PlatformApp({ route }: { route: string }) {
     refreshState,
     signOut,
     addProduce,
+    updateFarmPickupAddress,
     postDemand,
     updateProduce,
     updateDemand,
@@ -3010,6 +3064,7 @@ export default function PlatformApp({ route }: { route: string }) {
           id={userId}
           name={state.user?.name ?? ""}
           add={addProduce}
+          updatePickupAddress={updateFarmPickupAddress}
           update={updateProduce}
           close={closeProduce}
         />

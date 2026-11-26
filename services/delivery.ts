@@ -1,4 +1,9 @@
-import type { Deal, DemandListing, UserRole } from "@/types";
+import type {
+  Deal,
+  DemandListing,
+  FarmerProfile,
+  UserRole,
+} from "@/types";
 
 export function calculateRiderFee(distanceKm: number, ratePerKm: number) {
   return Math.round(distanceKm * ratePerKm);
@@ -26,6 +31,26 @@ export function canViewOrderDeliveryAddress(
   return (
     role === "admin" ||
     (role === "buyer" && order.buyerId === userId) ||
+    (role === "rider" && order.riderId === userId)
+  );
+}
+
+export function canViewFarmerPickupAddress(
+  farmer: Pick<FarmerProfile, "id">,
+  role: UserRole | null,
+  userId?: string,
+) {
+  return role === "admin" || (role === "farmer" && farmer.id === userId);
+}
+
+export function canViewOrderPickupAddress(
+  order: Pick<Deal, "farmerId" | "riderId">,
+  role: UserRole | null,
+  userId?: string,
+) {
+  return (
+    role === "admin" ||
+    (role === "farmer" && order.farmerId === userId) ||
     (role === "rider" && order.riderId === userId)
   );
 }

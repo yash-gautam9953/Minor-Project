@@ -25,6 +25,7 @@ export interface FarmerProfile {
   name: string;
   location: string;
   phone: string;
+  pickupAddress?: string | null;
   verified: boolean;
   rating: number;
 }
@@ -76,6 +77,7 @@ export interface Deal {
   buyerId: string;
   buyerName: string;
   farmerLocation?: string | null;
+  pickupAddress?: string | null;
   deliveryAddress?: string | null;
   produce: string;
   quantityKg: number;
@@ -130,6 +132,7 @@ export interface PlatformActions {
     produceId: string,
     listing: Pick<ProduceListing, "produce" | "quantityKg" | "askingPricePerKg" | "location" | "availableBy">,
   ) => Promise<void>;
+  updateFarmPickupAddress: (pickupAddress: string) => Promise<void>;
   updateDemand: (
     demandId: string,
     demand: Pick<DemandListing, "produce" | "quantityKg" | "targetPricePerKg" | "location" | "deliveryAddress" | "requiredBy" | "buyerType">,
