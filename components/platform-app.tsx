@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import {
   ArrowRight,
   BarChart3,
@@ -19,6 +19,7 @@ import {
   MapPin,
   Package,
   Plus,
+  RefreshCw,
   Search,
   Sprout,
   Store,
@@ -229,6 +230,8 @@ function Workspace({
   signOut: () => Promise<void>;
   children: ReactNode;
 }) {
+  const { refreshState } = usePlatform();
+  const [refreshing, setRefreshing] = useState(false);
   const links =
     role === "admin"
       ? adminNav
@@ -254,6 +257,17 @@ function Workspace({
       <span>{label}</span>
     </Link>
   );
+  const refreshWorkspace = async () => {
+    setRefreshing(true);
+    try {
+      await refreshState();
+      toast.success("Latest data loaded");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not refresh data.");
+    } finally {
+      setRefreshing(false);
+    }
+  };
   return (
     <div className="platform-shell flex">
       <a className="skip-link" href="#main-content">
@@ -310,6 +324,20 @@ function Workspace({
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              className="!min-h-9 gap-2 !px-3 text-[10px]"
+              aria-label="Refresh KhetLink data"
+              title="Refresh data from Appwrite"
+              disabled={refreshing}
+              onClick={() => void refreshWorkspace()}
+            >
+              <RefreshCw size={14} className={refreshing ? "animate-spin" : ""} />
+              <span className="hidden sm:inline">
+                {refreshing ? "Refreshing…" : "Refresh data"}
+              </span>
+            </Button>
             <span className="hidden rounded-full bg-[#eff4e9] px-3 py-1.5 text-[10px] font-semibold capitalize text-[#4b7350] sm:inline-flex">
               {role} view
             </span>
@@ -2010,13 +2038,11 @@ function Orders({
   role,
   id,
   update,
-  refresh,
 }: {
   state: PlatformState;
   role: "farmer" | "buyer";
   id: string;
   update: (dealId: string, status: DealStatus) => void;
-  refresh: () => Promise<void>;
 }) {
   const items = state.deals.filter(
     (deal) => (role === "farmer" ? deal.farmerId : deal.buyerId) === id,
@@ -2030,21 +2056,6 @@ function Orders({
         eyebrow={`${role} workspace`}
         title="Orders & deals"
         subtitle="Track your order, payment demo, and admin-managed delivery."
-        action={
-          <Button
-            variant="secondary"
-            onClick={async () => {
-              try {
-                await refresh();
-                toast.success("Order progress refreshed");
-              } catch (error) {
-                toast.error(error instanceof Error ? error.message : "Could not refresh orders.");
-              }
-            }}
-          >
-            Refresh progress
-          </Button>
-        }
       />
       <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-3">
         <Metric
@@ -2081,11 +2092,9 @@ function Orders({
 function AdminDashboard({
   state,
   assignRider,
-  refresh,
 }: {
   state: PlatformState;
   assignRider: ReturnType<typeof usePlatform>["adminAssignRider"];
-  refresh: () => Promise<void>;
 }) {
   const awaitingAssignment = state.deals.filter(
     (deal) =>
@@ -2118,7 +2127,6 @@ function AdminDashboard({
         deals={state.deals}
         riders={state.riders}
         assignRider={assignRider}
-        refresh={refresh}
       />
     </>
   );
@@ -2181,37 +2189,21 @@ function AdminDeliveryQueue({
   deals,
   riders,
   assignRider,
-  refresh,
 }: {
   deals: Deal[];
   riders: PlatformState["riders"];
   assignRider: ReturnType<typeof usePlatform>["adminAssignRider"];
-  refresh: () => Promise<void>;
 }) {
   const paidDeals = deals.filter(
     (deal) =>
       deal.paymentStatus === "simulated_paid" &&
       deal.deliveryStatus === "awaiting_assignment",
   );
-  const refreshQueue = async () => {
-    try {
-      await refresh();
-      toast.success("Delivery requests refreshed");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not refresh delivery requests.");
-    }
-  };
-
   return (
     <div className="mt-5">
       <Section
         eyebrow="Admin-managed deliveries"
         title="Assign a rider"
-        action={
-          <Button variant="secondary" onClick={() => void refreshQueue()}>
-            Refresh requests
-          </Button>
-        }
       >
         {paidDeals.length ? (
           <div className="space-y-4">
@@ -2381,32 +2373,17 @@ function AdminDeliveryCard({
 function RiderDashboard({
   deals,
   updateDeliveryStatus,
-  refresh,
 }: {
   deals: Deal[];
   updateDeliveryStatus: ReturnType<typeof usePlatform>["riderUpdateDeliveryStatus"];
-  refresh: () => Promise<void>;
 }) {
   const activeDeals = deals.filter((deal) => deal.deliveryStatus !== "delivered");
-  const refreshDeliveries = async () => {
-    try {
-      await refresh();
-      toast.success("Deliveries refreshed");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not refresh deliveries.");
-    }
-  };
   return (
     <>
       <Heading
         eyebrow="Rider workspace"
         title="My deliveries"
         subtitle="Open an assigned delivery, check pickup and drop-off details, then update each step when it happens."
-        action={
-          <Button variant="secondary" onClick={() => void refreshDeliveries()}>
-            Refresh deliveries
-          </Button>
-        }
       />
       <div className="mb-5 grid grid-cols-2 gap-3">
         <Metric label="Active deliveries" value={`${activeDeals.length}`} helper="Assigned to your account" icon={Truck} />
@@ -2851,7 +2828,6 @@ function Impact({ state }: { state: PlatformState }) {
 
 export default function PlatformApp({ route }: { route: string }) {
   const router = useRouter();
-  const previousRoute = useRef(route);
   const {
     state,
     isReady,
@@ -2907,22 +2883,6 @@ export default function PlatformApp({ route }: { route: string }) {
       );
     }
   }, [isReady, loadError, requiresRole, routeRole, router, state.user]);
-
-  useEffect(() => {
-    if (previousRoute.current === route) return;
-    previousRoute.current = route;
-    if (
-      !isReady ||
-      !route ||
-      route === "login" ||
-      route === "register"
-    ) {
-      return;
-    }
-    void refreshState().catch((error: unknown) => {
-      toast.error(error instanceof Error ? error.message : "Could not refresh platform data.");
-    });
-  }, [isReady, refreshState, route]);
 
   const onAuth = async (
     role: UserRole,
@@ -3113,7 +3073,6 @@ export default function PlatformApp({ route }: { route: string }) {
           role={route.startsWith("buyer/") ? "buyer" : "farmer"}
           id={userId}
           update={updateDealStatus}
-          refresh={refreshState}
         />
       </Workspace>
     );
@@ -3139,7 +3098,6 @@ export default function PlatformApp({ route }: { route: string }) {
         <AdminDashboard
           state={state}
           assignRider={adminAssignRider}
-          refresh={refreshState}
         />
       </Workspace>
     );
@@ -3154,7 +3112,6 @@ export default function PlatformApp({ route }: { route: string }) {
         <RiderDashboard
           deals={state.deals}
           updateDeliveryStatus={riderUpdateDeliveryStatus}
-          refresh={refreshState}
         />
       </Workspace>
     );

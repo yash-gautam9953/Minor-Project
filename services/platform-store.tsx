@@ -76,15 +76,10 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const refreshState = useCallback(async () => {
-    try {
-      const authenticated = await hasAppwriteSession();
-      const remoteState = await loadPlatformState(authenticated);
-      setLoadError(null);
-      setState(remoteState);
-    } catch (error) {
-      setLoadError(errorMessage(error));
-      throw error;
-    }
+    const authenticated = await hasAppwriteSession();
+    const remoteState = await loadPlatformState(authenticated);
+    setLoadError(null);
+    setState(remoteState);
   }, []);
 
   const signOut = useCallback(async () => {
