@@ -1,7 +1,15 @@
-export type UserRole = "farmer" | "buyer" | "admin";
+export type UserRole = "farmer" | "buyer" | "rider" | "admin";
 export type BuyerType = "Retailer" | "Restaurant" | "Hostel" | "Small business";
 export type ListingStatus = "open" | "matched" | "closed";
 export type DealStatus = "pending" | "confirmed" | "completed";
+export type PaymentStatus = "unpaid" | "simulated_paid";
+export type DemoPaymentMethod = "upi" | "card" | "bank";
+export type DeliveryStatus =
+  | "awaiting_payment"
+  | "awaiting_assignment"
+  | "rider_assigned"
+  | "at_farmer"
+  | "delivered";
 
 export interface UserProfile {
   id: string;
@@ -29,6 +37,12 @@ export interface BuyerProfile {
   phone: string;
 }
 
+export interface RiderProfile {
+  id: string;
+  name: string;
+  location: string;
+}
+
 export interface ProduceListing {
   id: string;
   farmerId: string;
@@ -50,6 +64,7 @@ export interface DemandListing {
   quantityKg: number;
   targetPricePerKg: number;
   location: string;
+  deliveryAddress?: string;
   requiredBy: string;
   status: ListingStatus;
 }
@@ -60,12 +75,24 @@ export interface Deal {
   farmerName: string;
   buyerId: string;
   buyerName: string;
+  farmerLocation?: string | null;
+  deliveryAddress?: string | null;
   produce: string;
   quantityKg: number;
   agreedPricePerKg: number;
   totalValue: number;
   status: DealStatus;
   createdAt: string;
+  paymentStatus?: PaymentStatus;
+  demoPaymentMethod?: DemoPaymentMethod | null;
+  paymentSimulatedAt?: string | null;
+  deliveryStatus?: DeliveryStatus;
+  riderId?: string | null;
+  riderName?: string | null;
+  distanceKm?: number | null;
+  riderRatePerKm?: number | null;
+  riderFee?: number | null;
+  deliveryUpdatedAt?: string | null;
 }
 
 export interface PlatformMetrics {
@@ -76,25 +103,18 @@ export interface PlatformMetrics {
   acceptedMatchCount: number;
   completedOrderCount: number;
   completedOrderVolumeKg: number;
+  estimatedCommissionTotal: number;
 }
 
 export interface PlatformState {
   user: UserProfile | null;
   farmers: FarmerProfile[];
   buyers: BuyerProfile[];
+  riders: RiderProfile[];
   produce: ProduceListing[];
   demands: DemandListing[];
   deals: Deal[];
   metrics: PlatformMetrics;
-  adminUsers?: AdminUser[];
-}
-
-export interface AdminUser {
-  id: string;
-  name: string;
-  email: string;
-  status: boolean;
-  role?: "farmer" | "buyer";
 }
 
 export interface PlatformActions {
@@ -112,12 +132,21 @@ export interface PlatformActions {
   ) => Promise<void>;
   updateDemand: (
     demandId: string,
-    demand: Pick<DemandListing, "produce" | "quantityKg" | "targetPricePerKg" | "location" | "requiredBy" | "buyerType">,
+    demand: Pick<DemandListing, "produce" | "quantityKg" | "targetPricePerKg" | "location" | "deliveryAddress" | "requiredBy" | "buyerType">,
   ) => Promise<void>;
   closeProduce: (produceId: string) => Promise<void>;
   closeDemand: (demandId: string) => Promise<void>;
-  adminCloseListing: (kind: "produce" | "demand", documentId: string) => Promise<void>;
-  adminSetUserStatus: (userId: string, status: boolean) => Promise<void>;
   acceptMatch: (demandId: string, produceId: string) => Promise<void>;
   updateDealStatus: (dealId: string, status: DealStatus) => Promise<void>;
+  simulatePayment: (dealId: string, method: DemoPaymentMethod) => Promise<void>;
+  adminAssignRider: (
+    dealId: string,
+    riderId: string,
+    distanceKm: number,
+    ratePerKm: number,
+  ) => Promise<void>;
+  riderUpdateDeliveryStatus: (
+    dealId: string,
+    status: "at_farmer" | "delivered",
+  ) => Promise<void>;
 }

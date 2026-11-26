@@ -19,11 +19,14 @@ export async function createAppwriteAccount(
 ) {
   if (!account) throw new Error("Appwrite authentication is not configured.");
   await account.create(ID.unique(), email, password, name);
-  await account.createEmailPasswordSession(email, password);
+  await createAppwriteSession(email, password);
 }
 
 export async function createAppwriteSession(email: string, password: string) {
   if (!account) throw new Error("Appwrite authentication is not configured.");
+  if (await hasAppwriteSession()) {
+    await endAppwriteSession();
+  }
   await account.createEmailPasswordSession(email, password);
 }
 

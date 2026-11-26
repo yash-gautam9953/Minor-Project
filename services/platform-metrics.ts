@@ -6,6 +6,7 @@ import type {
   PlatformMetrics,
   ProduceListing,
 } from "@/types";
+import { calculatePlatformCommission } from "@/services/commission";
 
 export function calculatePlatformMetrics(data: {
   farmers: FarmerProfile[];
@@ -16,6 +17,7 @@ export function calculatePlatformMetrics(data: {
   acceptedMatchCount: number;
 }): PlatformMetrics {
   const completedOrders = data.deals.filter((deal) => deal.status === "completed");
+  const acceptedDeals = data.deals.filter((deal) => deal.status !== "pending");
 
   return {
     farmerCount: data.farmers.length,
@@ -30,6 +32,10 @@ export function calculatePlatformMetrics(data: {
     completedOrderCount: completedOrders.length,
     completedOrderVolumeKg: completedOrders.reduce(
       (total, deal) => total + deal.quantityKg,
+      0,
+    ),
+    estimatedCommissionTotal: acceptedDeals.reduce(
+      (total, deal) => total + calculatePlatformCommission(deal.totalValue),
       0,
     ),
   };

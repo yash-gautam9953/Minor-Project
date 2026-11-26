@@ -15,6 +15,7 @@ import {
   runPlatformAction,
 } from "@/lib/appwrite";
 import type {
+  DemoPaymentMethod,
   DealStatus,
   PlatformActions,
   PlatformState,
@@ -24,6 +25,7 @@ const emptyPlatformState: PlatformState = {
   user: null,
   farmers: [],
   buyers: [],
+  riders: [],
   produce: [],
   demands: [],
   deals: [],
@@ -35,6 +37,7 @@ const emptyPlatformState: PlatformState = {
     acceptedMatchCount: 0,
     completedOrderCount: 0,
     completedOrderVolumeKg: 0,
+    estimatedCommissionTotal: 0,
   },
 };
 const PlatformContext = createContext<PlatformActions | null>(null);
@@ -152,24 +155,6 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
     [],
   );
 
-  const adminCloseListing = useCallback<PlatformActions["adminCloseListing"]>(
-    async (kind, documentId) => {
-      setState(
-        await runPlatformAction("adminCloseListing", { kind, documentId }),
-      );
-    },
-    [],
-  );
-
-  const adminSetUserStatus = useCallback<PlatformActions["adminSetUserStatus"]>(
-    async (userId, status) => {
-      setState(
-        await runPlatformAction("adminSetUserStatus", { userId, status }),
-      );
-    },
-    [],
-  );
-
   const acceptMatch = useCallback<PlatformActions["acceptMatch"]>(
     async (demandId, produceId) => {
       setState(
@@ -182,6 +167,38 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
   const updateDealStatus = useCallback<PlatformActions["updateDealStatus"]>(
     async (dealId, status: DealStatus) => {
       setState(await runPlatformAction("updateDealStatus", { dealId, status }));
+    },
+    [],
+  );
+
+  const simulatePayment = useCallback<PlatformActions["simulatePayment"]>(
+    async (dealId, method: DemoPaymentMethod) => {
+      setState(await runPlatformAction("simulatePayment", { dealId, method }));
+    },
+    [],
+  );
+
+  const adminAssignRider = useCallback<PlatformActions["adminAssignRider"]>(
+    async (dealId, riderId, distanceKm, ratePerKm) => {
+      setState(
+        await runPlatformAction("adminAssignRider", {
+          dealId,
+          riderId,
+          distanceKm,
+          ratePerKm,
+        }),
+      );
+    },
+    [],
+  );
+
+  const riderUpdateDeliveryStatus = useCallback<
+    PlatformActions["riderUpdateDeliveryStatus"]
+  >(
+    async (dealId, status) => {
+      setState(
+        await runPlatformAction("riderUpdateDeliveryStatus", { dealId, status }),
+      );
     },
     [],
   );
@@ -200,10 +217,11 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
       updateDemand,
       closeProduce,
       closeDemand,
-      adminCloseListing,
-      adminSetUserStatus,
       acceptMatch,
       updateDealStatus,
+      simulatePayment,
+      adminAssignRider,
+      riderUpdateDeliveryStatus,
     }),
     [
       state,
@@ -218,10 +236,11 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
       updateDemand,
       closeProduce,
       closeDemand,
-      adminCloseListing,
-      adminSetUserStatus,
       acceptMatch,
       updateDealStatus,
+      simulatePayment,
+      adminAssignRider,
+      riderUpdateDeliveryStatus,
     ],
   );
 

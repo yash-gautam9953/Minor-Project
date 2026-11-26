@@ -10,6 +10,7 @@ import {
   Bell,
   Check,
   ClipboardList,
+  CreditCard,
   Eye,
   EyeOff,
   Handshake,
@@ -21,6 +22,7 @@ import {
   Search,
   Sprout,
   Store,
+  Truck,
   TrendingUp,
   Users,
 } from "lucide-react";
@@ -36,7 +38,20 @@ import { Button as UiButton } from "@/components/ui/button";
 import { usePlatform } from "@/services/platform-store";
 import { crops, locations } from "@/services/platform-options";
 import { findDemandMatches, findFarmerMatches } from "@/services/matching";
-import type { BuyerType, DealStatus, PlatformState, UserRole } from "@/types";
+import type {
+  BuyerType,
+  Deal,
+  DealStatus,
+  DeliveryStatus,
+  DemoPaymentMethod,
+  PlatformState,
+  UserRole,
+} from "@/types";
+import {
+  calculatePlatformCommission,
+  PLATFORM_COMMISSION_RATE,
+} from "@/services/commission";
+import { calculateRiderFee } from "@/services/delivery";
 const money = (value: number) =>
   new Intl.NumberFormat("en-IN", {
     style: "currency",
@@ -189,6 +204,9 @@ const buyerNav = [
   ["Find farmers", "/buyer/matches", Search],
   ["Orders & deals", "/buyer/orders", Handshake],
 ] as const;
+const riderNav = [
+  ["My deliveries", "/rider/dashboard", Truck],
+] as const;
 const commonNav = [
   ["Local discovery", "/marketplace", MapPin],
   ["Price transparency", "/price-transparency", BarChart3],
@@ -212,7 +230,13 @@ function Workspace({
   children: ReactNode;
 }) {
   const links =
-    role === "admin" ? adminNav : role === "buyer" ? buyerNav : farmerNav;
+    role === "admin"
+      ? adminNav
+      : role === "buyer"
+        ? buyerNav
+        : role === "rider"
+          ? riderNav
+          : farmerNav;
   const sideLink = ([label, href, Icon]: readonly [
     string,
     string,
@@ -319,6 +343,15 @@ function Workspace({
         </main>
       </div>
     </div>
+  );
+}
+
+function isAppwriteConflict(error: unknown) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === 409
   );
 }
 
@@ -510,7 +543,9 @@ function Auth({
       ? "/buyer/dashboard"
       : nextRole === "admin"
         ? "/admin/dashboard"
-        : "/farmer/dashboard";
+        : nextRole === "rider"
+          ? "/rider/dashboard"
+          : "/farmer/dashboard";
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -524,21 +559,44 @@ function Auth({
     const buyerType = String(form.get("buyerType") || "") as BuyerType | "";
     setBusy(true);
     try {
+      let existingAuthAccount = false;
       if (register) {
-        await createAppwriteAccount(name, email, password);
+        try {
+          await createAppwriteAccount(name, email, password);
+        } catch (error) {
+          if (!isAppwriteConflict(error)) throw error;
+          await createAppwriteSession(email, password);
+          existingAuthAccount = true;
+        }
       } else {
         await createAppwriteSession(email, password);
       }
-      const authenticatedRole = await onAuth(
-        role,
-        name,
-        email,
-        register,
-        location,
-        buyerType,
-      );
+      let authenticatedRole: UserRole;
+      try {
+        authenticatedRole = await onAuth(
+          role,
+          name,
+          email,
+          register,
+          location,
+          buyerType,
+        );
+      } catch (profileError) {
+        if (!existingAuthAccount) throw profileError;
+        try {
+          const existingState = await loadPlatformState(true);
+          if (!existingState.user) throw profileError;
+          authenticatedRole = existingState.user.role;
+        } catch {
+          throw profileError;
+        }
+      }
       toast.success(
-        register ? "Account created" : `Welcome, ${name.split(" ")[0]}`,
+        existingAuthAccount
+          ? "Account profile is ready"
+          : register
+            ? "Account created"
+            : `Welcome, ${name.split(" ")[0]}`,
       );
       router.push(destination(authenticatedRole));
     } catch (error) {
@@ -590,16 +648,16 @@ function Auth({
           </h1>
           <p className="mt-2 text-sm text-[#778178]">
             {register
-              ? "Create an account to sell or buy local produce."
-              : "View your listings, matches and orders."}
+              ? "Create an account to sell, buy, or deliver local produce."
+              : "View your workspace and assigned activity."}
           </p>
           {register && (
             <div
               role="group"
               aria-label="Account type"
-              className="mt-7 grid grid-cols-2 rounded-md border border-[#e3e8e0] bg-[#f7f8f4] p-1"
+              className="mt-7 grid grid-cols-3 rounded-md border border-[#e3e8e0] bg-[#f7f8f4] p-1"
             >
-              {(["farmer", "buyer"] as const).map((item) => (
+              {(["farmer", "buyer", "rider"] as const).map((item) => (
                 <button
                   key={item}
                   type="button"
@@ -616,18 +674,20 @@ function Auth({
             {register && (
               <div>
                 <label className="field-label" htmlFor="auth-name">
-                  {role === "farmer" ? "Your name" : "Business name"}
+                  {role === "buyer"
+                    ? "Business name"
+                    : role === "rider"
+                      ? "Rider name"
+                      : "Your name"}
                 </label>
                 <input
                   id="auth-name"
                   className="input-field"
                   name="name"
                   placeholder={
-                    role === "farmer"
-                      ? "Enter your name"
-                      : "Enter your business name"
+                    role === "buyer" ? "Enter your business name" : "Enter your name"
                   }
-                  autoComplete={role === "farmer" ? "name" : "organization"}
+                  autoComplete={role === "buyer" ? "organization" : "name"}
                   required
                 />
               </div>
@@ -889,7 +949,7 @@ function DealsTable({
       tabIndex={0}
       className="table-scroll"
     >
-      <table className="w-full min-w-[650px] text-left">
+      <table className="w-full min-w-[900px] text-left">
         <thead className="table-head">
           <tr>
             {[
@@ -899,6 +959,7 @@ function DealsTable({
               "Agreed price",
               "Value",
               "Status",
+              "Delivery",
               "",
             ].map((item, index) => (
               <th key={`${item}-${index}`} className="px-4 py-3 font-semibold">
@@ -932,43 +993,275 @@ function DealsTable({
                 </span>
               </td>
               <td className="px-4 py-3.5">
-                {deal.status === "pending" ? (
-                  <button
-                    onClick={async () => {
-                      try {
-                        await update(deal.id, "confirmed");
-                        toast.success("Deal confirmed");
-                      } catch (error) {
-                        toast.error(error instanceof Error ? error.message : "Could not update this deal.");
-                      }
-                    }}
-                    className="text-[10px] font-semibold text-[#47744f]"
-                  >
-                    Confirm
-                  </button>
-                ) : deal.status === "confirmed" ? (
-                  <button
-                    onClick={async () => {
-                      try {
-                        await update(deal.id, "completed");
-                        toast.success("Deal marked complete");
-                      } catch (error) {
-                        toast.error(error instanceof Error ? error.message : "Could not update this deal.");
-                      }
-                    }}
-                    className="text-[10px] font-semibold text-[#47744f]"
-                  >
-                    Complete
-                  </button>
-                ) : (
-                  <Check size={14} className="text-[#58825b]" />
+                <DeliveryProgress deal={deal} />
+                {role === "buyer" && deal.deliveryAddress && (
+                  <p className="mt-1 max-w-[220px] whitespace-normal text-[10px] text-[#788279]">
+                    Drop-off: {deal.deliveryAddress}
+                  </p>
                 )}
+              </td>
+              <td className="px-4 py-3.5">
+                <div className="flex flex-col items-start gap-2">
+                  {deal.status === "pending" ? (
+                    <button
+                      onClick={async () => {
+                        try {
+                          await update(deal.id, "confirmed");
+                          toast.success("Deal confirmed");
+                        } catch (error) {
+                          toast.error(error instanceof Error ? error.message : "Could not update this deal.");
+                        }
+                      }}
+                      className="text-[10px] font-semibold text-[#47744f]"
+                    >
+                      Confirm
+                    </button>
+                  ) : deal.status === "confirmed" ? (
+                    role === "buyer" &&
+                    (deal.paymentStatus !== "simulated_paid" ||
+                      deal.deliveryStatus === "delivered") ? (
+                      <button
+                        onClick={async () => {
+                          try {
+                            await update(deal.id, "completed");
+                            toast.success("Order marked complete");
+                          } catch (error) {
+                            toast.error(error instanceof Error ? error.message : "Could not update this order.");
+                          }
+                        }}
+                        className="text-[10px] font-semibold text-[#47744f]"
+                      >
+                        Confirm received
+                      </button>
+                    ) : (
+                      <span className="max-w-28 text-[10px] text-[#788279]">
+                        {role === "farmer"
+                          ? "Buyer confirms receipt"
+                          : "Waiting for rider delivery"}
+                      </span>
+                    )
+                  ) : (
+                    <Check size={14} className="text-[#58825b]" />
+                  )}
+                  {role === "buyer" && deal.status !== "pending" && (
+                    <Link
+                      href={`/buyer/payment/${deal.id}`}
+                      className="inline-flex items-center gap-1 whitespace-nowrap text-[10px] font-semibold text-[#47744f] underline underline-offset-2"
+                    >
+                      <CreditCard size={12} />
+                      {deal.paymentStatus === "simulated_paid"
+                        ? "View delivery"
+                        : "Payment demo"}
+                    </Link>
+                  )}
+                </div>
               </td>
             </tr>
           ))}
         </tbody>
       </table>
     </div>
+  );
+}
+
+function DeliveryProgress({ deal }: { deal: Deal }) {
+  const status: DeliveryStatus =
+    deal.deliveryStatus ??
+    (deal.paymentStatus === "simulated_paid"
+      ? "awaiting_assignment"
+      : "awaiting_payment");
+  const labels = [
+    "Rider assigned",
+    "Reached farmer",
+    "Delivered to buyer",
+  ] as const;
+  const completedSteps: Record<DeliveryStatus, number> = {
+    awaiting_payment: 0,
+    awaiting_assignment: 0,
+    rider_assigned: 1,
+    at_farmer: 2,
+    delivered: 3,
+  };
+  const statusText: Record<DeliveryStatus, string> = {
+    awaiting_payment: "Waiting for buyer payment",
+    awaiting_assignment: "Paid demo order · waiting for admin to assign a rider",
+    rider_assigned: `Rider assigned${deal.riderName ? `: ${deal.riderName}` : ""}`,
+    at_farmer: "Rider reached the farmer",
+    delivered: "Delivered to the buyer",
+  };
+  const stepsDone = completedSteps[status];
+
+  return (
+    <div className="space-y-2">
+      <p className="text-[11px] font-semibold text-[#315b3d]">
+        {statusText[status]}
+      </p>
+      {status !== "awaiting_payment" && (
+        <ol aria-label="Delivery progress" className="flex flex-wrap gap-1.5">
+          {labels.map((label, index) => (
+            <li
+              key={label}
+              className={`rounded-full border px-2 py-1 text-[9px] ${
+                index < stepsDone
+                  ? "border-[#cfe0ca] bg-[#edf4e9] text-[#315b3d]"
+                  : "border-[#e5e9e1] bg-white text-[#7b857c]"
+              }`}
+            >
+              {index < stepsDone ? "✓ " : `${index + 1}. `}
+              {label}
+            </li>
+          ))}
+        </ol>
+      )}
+      {deal.riderName && deal.distanceKm !== null && deal.distanceKm !== undefined && (
+        <p className="text-[10px] text-[#788279]">
+          {deal.distanceKm} km · rider fee {money(deal.riderFee ?? 0)}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function DemoPayment({
+  deal,
+  pay,
+}: {
+  deal?: Deal;
+  pay: (dealId: string, method: DemoPaymentMethod) => Promise<void>;
+}) {
+  const [method, setMethod] = useState<DemoPaymentMethod>("upi");
+  const [busy, setBusy] = useState(false);
+
+  if (!deal || deal.status === "pending") {
+    return (
+      <Section eyebrow="Demo payment" title="Payment is not available">
+        <p className="text-sm leading-6 text-[#768078]">
+          This accepted order could not be found. Only confirmed or completed
+          orders can be used in the payment demonstration.
+        </p>
+        <Link
+          href="/buyer/orders"
+          className="mt-4 inline-flex text-xs font-semibold text-[#47744f] underline underline-offset-4"
+        >
+          Back to orders
+        </Link>
+      </Section>
+    );
+  }
+
+  const commission = calculatePlatformCommission(deal.totalValue);
+  const totalDue = deal.totalValue + commission;
+  const methods = [
+    ["upi", "UPI"],
+    ["card", "Debit or credit card"],
+    ["bank", "Net banking"],
+  ] satisfies ReadonlyArray<readonly [DemoPaymentMethod, string]>;
+
+  const simulate = async () => {
+    setBusy(true);
+    try {
+      await pay(deal.id, method);
+      toast.success("Demo payment recorded. No money was transferred.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not record the demo payment.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <Heading
+        eyebrow="Payment flow · simulation only"
+        title="Review your payment"
+        subtitle="This screen demonstrates a possible checkout. It will not charge you or transfer money."
+        action={
+          <Link
+            href="/buyer/orders"
+            className="btn-secondary inline-flex min-h-10 items-center rounded-md px-4 text-xs font-semibold"
+          >
+            Back to orders
+          </Link>
+        }
+      />
+      <div className="grid items-start gap-5 lg:grid-cols-[1.1fr_.9fr]">
+        <Section eyebrow="Order summary" title={`${deal.produce} from ${deal.farmerName}`}>
+          <div className="space-y-4">
+            <Info label="Quantity" value={`${deal.quantityKg} kg`} />
+            <Info label="Agreed price" value={`${money(deal.agreedPricePerKg)} per kg`} />
+            <div className="border-t border-[#edf0eb] pt-4">
+              <div className="flex justify-between gap-4 text-sm">
+                <span>Order subtotal</span>
+                <strong>{money(deal.totalValue)}</strong>
+              </div>
+              <div className="mt-3 flex justify-between gap-4 text-sm">
+                <span>
+                  Example platform fee ({PLATFORM_COMMISSION_RATE * 100}%)
+                </span>
+                <strong>{money(commission)}</strong>
+              </div>
+              <div className="mt-4 flex justify-between gap-4 border-t border-[#edf0eb] pt-4 text-base font-semibold">
+                <span>Total shown for demo</span>
+                <span>{money(totalDue)}</span>
+              </div>
+            </div>
+            <p className="text-[11px] leading-5 text-[#788279]">
+              Rider fee is set by the admin after assignment using the route
+              distance and the selected rider&apos;s per-km rate. It is shown
+              separately and is not included in this demo total.
+            </p>
+          </div>
+        </Section>
+        <Section eyebrow="Choose a method" title="Demo payment method">
+          {deal.paymentStatus === "simulated_paid" ? (
+            <div className="space-y-4">
+              <p
+                role="status"
+                className="rounded-md border border-[#dce8d8] bg-[#f0f5ed] p-4 text-sm text-[#315b3d]"
+              >
+                Demo payment recorded. No money was charged or transferred.
+              </p>
+              <DeliveryProgress deal={deal} />
+            </div>
+          ) : (
+            <>
+              <div role="group" aria-label="Demo payment method" className="space-y-2">
+                {methods.map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    aria-pressed={method === value}
+                    onClick={() => setMethod(value)}
+                    className={`flex min-h-12 w-full items-center justify-between rounded-md border px-4 text-left text-xs font-semibold ${
+                      method === value
+                        ? "border-[#527b56] bg-[#f0f5ed] text-[#315b3d]"
+                        : "border-[#e3e8e0] bg-white text-[#536057]"
+                    }`}
+                  >
+                    {label}
+                    <span aria-hidden="true">{method === value ? "Selected" : ""}</span>
+                  </button>
+                ))}
+              </div>
+              <p className="mt-4 rounded-md bg-[#fff7e8] p-3 text-xs leading-5 text-[#735b2b]">
+                Simulation only: no card, UPI or bank details are collected and
+                no real payment is made. The simulated payment status is saved
+                to Appwrite so the admin can manage delivery.
+              </p>
+              <Button
+                className="mt-4 w-full"
+                onClick={() => void simulate()}
+                disabled={busy}
+                aria-busy={busy}
+              >
+                <CreditCard size={15} />
+                {busy ? "Recording demo…" : `Simulate payment · ${money(totalDue)}`}
+              </Button>
+            </>
+          )}
+        </Section>
+      </div>
+    </>
   );
 }
 
@@ -1146,6 +1439,11 @@ function ListingForm({
       : "",
   );
   const [location, setLocation] = useState(initial?.location ?? "");
+  const [deliveryAddress, setDeliveryAddress] = useState(
+    initial && "deliveryAddress" in initial
+      ? initial.deliveryAddress ?? ""
+      : "",
+  );
   const [minimumDate] = useState(() => dateInputValue(0));
   const [date, setDate] = useState(
     initial
@@ -1242,6 +1540,23 @@ function ListingForm({
                 <option key={item} value={item}>{item}</option>
               ))}
             </select>
+          </label>
+        )}
+        {!isFarmer && (
+          <label className="sm:col-span-2">
+            <span className="field-label">Full delivery address</span>
+            <textarea
+              name="deliveryAddress"
+              className="input-field min-h-20 resize-y"
+              value={deliveryAddress}
+              onChange={(event) => setDeliveryAddress(event.target.value)}
+              maxLength={512}
+              placeholder="House/building, street, area, landmark, PIN code"
+              required
+            />
+            <span className="mt-1 block text-[10px] text-[#849087]">
+              This address is shared with the assigned rider for this order.
+            </span>
           </label>
         )}
         <label>
@@ -1409,7 +1724,7 @@ function BuyerDemand({
   const router = useRouter();
   const [editing, setEditing] = useState<PlatformState["demands"][number] | null>(null);
   const items = state.demands.filter(
-    (demand) => demand.buyerId === id,
+    (demand) => demand.buyerId === id && demand.status !== "matched",
   );
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -1423,6 +1738,7 @@ function BuyerDemand({
         quantityKg: Number(form.get("quantity")),
         targetPricePerKg: Number(form.get("price")),
         location: String(form.get("location")),
+        deliveryAddress: String(form.get("deliveryAddress")),
         requiredBy: String(form.get("date")),
       });
       toast.success("Demand posted", {
@@ -1444,6 +1760,7 @@ function BuyerDemand({
         targetPricePerKg: Number(form.get("price")),
         buyerType: String(form.get("buyerType")) as BuyerType,
         location: String(form.get("location")),
+        deliveryAddress: String(form.get("deliveryAddress")),
         requiredBy: String(form.get("date")),
       });
       setEditing(null);
@@ -1498,6 +1815,9 @@ function BuyerDemand({
                     <p className="mt-1 text-[10px] text-[#788279]">
                       {item.buyerType} · {item.location} · by{" "}
                       {dayLabel(item.requiredBy)}
+                    </p>
+                    <p className="mt-1 max-w-sm text-[10px] text-[#788279]">
+                      Delivery address: {item.deliveryAddress || "Add an address before accepting a match"}
                     </p>
                   </div>
                   <span className="text-xs font-semibold">
@@ -1690,11 +2010,13 @@ function Orders({
   role,
   id,
   update,
+  refresh,
 }: {
   state: PlatformState;
   role: "farmer" | "buyer";
   id: string;
   update: (dealId: string, status: DealStatus) => void;
+  refresh: () => Promise<void>;
 }) {
   const items = state.deals.filter(
     (deal) => (role === "farmer" ? deal.farmerId : deal.buyerId) === id,
@@ -1707,7 +2029,22 @@ function Orders({
       <Heading
         eyebrow={`${role} workspace`}
         title="Orders & deals"
-        subtitle="Direct agreements between growers and bulk buyers. Payments and transport are arranged by participants."
+        subtitle="Track your order, payment demo, and admin-managed delivery."
+        action={
+          <Button
+            variant="secondary"
+            onClick={async () => {
+              try {
+                await refresh();
+                toast.success("Order progress refreshed");
+              } catch (error) {
+                toast.error(error instanceof Error ? error.message : "Could not refresh orders.");
+              }
+            }}
+          >
+            Refresh progress
+          </Button>
+        }
       />
       <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-3">
         <Metric
@@ -1734,8 +2071,8 @@ function Orders({
         <DealsTable items={items} role={role} update={update} />
       </Section>
       <p className="mt-4 text-[10px] text-[#8a948b]">
-        Deals in this MVP record agreement only. There is no payment gateway or
-        delivery tracking.
+        Payment is a simulation only. Assigned riders update progress in their
+        rider panel; there is no live GPS tracking.
       </p>
     </>
   );
@@ -1743,179 +2080,426 @@ function Orders({
 
 function AdminDashboard({
   state,
-  closeListing,
-  setUserStatus,
+  assignRider,
+  refresh,
 }: {
   state: PlatformState;
-  closeListing: ReturnType<typeof usePlatform>["adminCloseListing"];
-  setUserStatus: ReturnType<typeof usePlatform>["adminSetUserStatus"];
+  assignRider: ReturnType<typeof usePlatform>["adminAssignRider"];
+  refresh: () => Promise<void>;
 }) {
-  const users = state.adminUsers ?? [];
-  const closeItem = async (kind: "produce" | "demand", id: string) => {
-    if (!window.confirm("Close this open marketplace listing?")) return;
+  const awaitingAssignment = state.deals.filter(
+    (deal) =>
+      deal.paymentStatus === "simulated_paid" &&
+      (deal.deliveryStatus ?? "awaiting_assignment") === "awaiting_assignment",
+  ).length;
+  const deliveredCount = state.deals.filter(
+    (deal) => deal.deliveryStatus === "delivered",
+  ).length;
+  return (
+    <>
+      <Heading
+        eyebrow="Restricted workspace"
+        title="Orders and rider assignment"
+        subtitle="Review orders, confirm the delivery address, set the route distance and rider rate, then assign a registered rider. Riders update delivery progress."
+      />
+      <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Metric label="Orders" value={`${state.deals.length}`} helper="All Appwrite orders" icon={ClipboardList} />
+        <Metric label="Awaiting rider" value={`${awaitingAssignment}`} helper="Buyer demo payment recorded" icon={Truck} warm />
+        <Metric label="Delivered" value={`${deliveredCount}`} helper="Rider marked complete" icon={Package} />
+        <Metric
+          label="Estimated commission"
+          value={money(state.metrics.estimatedCommissionTotal)}
+          helper={`${PLATFORM_COMMISSION_RATE * 100}% per accepted deal · estimate only`}
+          icon={TrendingUp}
+        />
+      </div>
+      <AdminOrders deals={state.deals} />
+      <AdminDeliveryQueue
+        deals={state.deals}
+        riders={state.riders}
+        assignRider={assignRider}
+        refresh={refresh}
+      />
+    </>
+  );
+}
+
+function AdminOrders({ deals }: { deals: Deal[] }) {
+  return (
+    <Section eyebrow="Order review" title="All orders">
+      {deals.length ? (
+        <div role="region" aria-label="All orders" tabIndex={0} className="table-scroll">
+          <table className="w-full min-w-[820px] text-left">
+            <thead className="table-head">
+              <tr>
+                {["Order", "Farmer", "Buyer", "Delivery address", "Order value", "Rider fee", "Delivery"].map((item) => (
+                  <th key={item} className="px-4 py-3 font-semibold">{item}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {deals.map((deal) => (
+                <tr key={deal.id} className="table-row text-xs">
+                  <td className="px-4 py-3.5 font-semibold">
+                    {deal.produce} · {deal.quantityKg} kg
+                    <span className="mt-1 block text-[10px] font-normal text-[#859087]">
+                      {money(deal.agreedPricePerKg)}/kg
+                    </span>
+                  </td>
+                  <td className="px-4 py-3.5">
+                    {deal.farmerName}
+                    <span className="mt-1 block text-[10px] text-[#859087]">{deal.farmerLocation || "Farm location unavailable"}</span>
+                  </td>
+                  <td className="px-4 py-3.5">{deal.buyerName}</td>
+                  <td className="max-w-[240px] px-4 py-3.5 whitespace-normal">
+                    {deal.deliveryAddress || "Address not available"}
+                  </td>
+                  <td className="px-4 py-3.5">{money(deal.totalValue)}</td>
+                  <td className="px-4 py-3.5">{deal.riderFee == null ? "—" : money(deal.riderFee)}</td>
+                  <td className="px-4 py-3.5">
+                    {deal.deliveryStatus === "delivered"
+                      ? "Delivered"
+                      : deal.riderName
+                        ? `${deal.riderName} · ${deal.deliveryStatus === "at_farmer" ? "At farm" : "Assigned"}`
+                        : deal.paymentStatus === "simulated_paid"
+                          ? "Awaiting rider"
+                          : "Awaiting buyer payment"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <Empty title="No orders yet" body="Accepted buyer-farmer matches will appear here." icon={Handshake} />
+      )}
+    </Section>
+  );
+}
+
+function AdminDeliveryQueue({
+  deals,
+  riders,
+  assignRider,
+  refresh,
+}: {
+  deals: Deal[];
+  riders: PlatformState["riders"];
+  assignRider: ReturnType<typeof usePlatform>["adminAssignRider"];
+  refresh: () => Promise<void>;
+}) {
+  const paidDeals = deals.filter(
+    (deal) =>
+      deal.paymentStatus === "simulated_paid" &&
+      deal.deliveryStatus === "awaiting_assignment",
+  );
+  const refreshQueue = async () => {
     try {
-      await closeListing(kind, id);
-      toast.success("Listing closed");
+      await refresh();
+      toast.success("Delivery requests refreshed");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not close the listing.");
+      toast.error(error instanceof Error ? error.message : "Could not refresh delivery requests.");
     }
   };
-  const changeUserStatus = async (id: string, status: boolean) => {
+
+  return (
+    <div className="mt-5">
+      <Section
+        eyebrow="Admin-managed deliveries"
+        title="Assign a rider"
+        action={
+          <Button variant="secondary" onClick={() => void refreshQueue()}>
+            Refresh requests
+          </Button>
+        }
+      >
+        {paidDeals.length ? (
+          <div className="space-y-4">
+            {paidDeals.map((deal) => (
+              <AdminDeliveryCard
+                key={deal.id}
+                deal={deal}
+                riders={riders}
+                assignRider={assignRider}
+              />
+            ))}
+          </div>
+        ) : (
+          <Empty
+            icon={Package}
+            title="No paid orders waiting for delivery"
+            body="Orders with a recorded buyer demo payment will appear here for rider assignment."
+          />
+        )}
+      </Section>
+    </div>
+  );
+}
+
+function AdminDeliveryCard({
+  deal,
+  riders,
+  assignRider,
+}: {
+  deal: Deal;
+  riders: PlatformState["riders"];
+  assignRider: ReturnType<typeof usePlatform>["adminAssignRider"];
+}) {
+  const [riderId, setRiderId] = useState("");
+  const [distance, setDistance] = useState("");
+  const [ratePerKm, setRatePerKm] = useState("");
+  const [busy, setBusy] = useState(false);
+  const deliveryStatus = deal.deliveryStatus ?? "awaiting_assignment";
+  const distanceValue = Number(distance);
+  const rateValue = Number(ratePerKm);
+  const feePreview =
+    distanceValue > 0 && rateValue > 0
+      ? calculateRiderFee(distanceValue, rateValue)
+      : null;
+
+  const submitAssignment = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!riderId || distanceValue <= 0 || rateValue <= 0) {
+      toast.error("Choose a rider, route distance, and per-km rate.");
+      return;
+    }
+    setBusy(true);
     try {
-      await setUserStatus(id, status);
-      toast.success(status ? "Account enabled" : "Account disabled");
+      await assignRider(deal.id, riderId, distanceValue, rateValue);
+      toast.success("Rider assigned");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not update the account.");
+      toast.error(error instanceof Error ? error.message : "Could not assign this rider.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <article className="rounded-md border border-[#e5e9e1] bg-[#fbfcf9] p-4 sm:p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold">
+            {deal.produce} · {deal.quantityKg} kg
+          </p>
+          <p className="mt-1 text-xs text-[#788279]">
+            Farmer: {deal.farmerName} · Buyer: {deal.buyerName}
+          </p>
+        </div>
+        <span className="tag tag-green">Demo payment received</span>
+      </div>
+      <div className="mt-4">
+        <DeliveryProgress deal={deal} />
+      </div>
+      <div className="mt-4 grid gap-3 rounded-md bg-white p-3 text-xs sm:grid-cols-2">
+        <Info label="Pickup location" value={deal.farmerLocation || "Unavailable"} />
+        <Info label="Buyer delivery address" value={deal.deliveryAddress || "Missing — cannot assign"} />
+      </div>
+      {deliveryStatus === "awaiting_assignment" ? (
+        <form onSubmit={submitAssignment} className="mt-4 border-t border-[#edf0eb] pt-4">
+          <p className="mb-3 text-xs leading-5 text-[#6f7b71]">
+            Select a registered rider, enter the actual route distance and quoted
+            rate. The rider will update progress from their own panel.
+          </p>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <label className="text-[11px] font-medium text-[#536057]">
+              Registered rider
+              <select
+                className="input-field mt-1"
+                value={riderId}
+                onChange={(event) => setRiderId(event.target.value)}
+                disabled={!riders.length}
+                required
+              >
+                <option value="" disabled>Select rider</option>
+                {riders.map((rider) => (
+                  <option key={rider.id} value={rider.id}>
+                    {rider.name} · {rider.location}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-[11px] font-medium text-[#536057]">
+              Route distance (km)
+              <input
+                className="input-field mt-1"
+                type="number"
+                min="0.1"
+                max="5000"
+                step="0.1"
+                value={distance}
+                onChange={(event) => setDistance(event.target.value)}
+                required
+              />
+            </label>
+            <label className="text-[11px] font-medium text-[#536057]">
+              Rider rate (₹/km)
+              <input
+                className="input-field mt-1"
+                type="number"
+                min="0.1"
+                max="100000"
+                step="0.01"
+                value={ratePerKm}
+                onChange={(event) => setRatePerKm(event.target.value)}
+                required
+              />
+            </label>
+          </div>
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+            <p className="text-xs font-semibold text-[#315b3d]">
+              Calculated rider fee: {feePreview === null ? "Enter distance and rate" : money(feePreview)}
+            </p>
+            <Button
+              type="submit"
+              disabled={
+                busy ||
+                !riders.length ||
+                !deal.deliveryAddress?.trim()
+              }
+              aria-busy={busy}
+            >
+              {busy ? "Assigning…" : "Assign rider"}
+            </Button>
+          </div>
+          {!riders.length && (
+            <p className="mt-3 text-xs text-[#9b5441]">
+              No active rider accounts yet. Ask the rider to create a Rider account first.
+            </p>
+          )}
+        </form>
+      ) : (
+        <div className="mt-4 grid gap-3 rounded-md bg-white p-3 text-xs sm:grid-cols-3">
+          <Info label="Assigned rider" value={deal.riderName || "Unavailable"} />
+          <Info label="Route distance" value={deal.distanceKm == null ? "Unavailable" : `${deal.distanceKm} km`} />
+          <Info label="Rider fee" value={deal.riderFee == null ? "Unavailable" : money(deal.riderFee)} />
+        </div>
+      )}
+    </article>
+  );
+}
+
+function RiderDashboard({
+  deals,
+  updateDeliveryStatus,
+  refresh,
+}: {
+  deals: Deal[];
+  updateDeliveryStatus: ReturnType<typeof usePlatform>["riderUpdateDeliveryStatus"];
+  refresh: () => Promise<void>;
+}) {
+  const activeDeals = deals.filter((deal) => deal.deliveryStatus !== "delivered");
+  const refreshDeliveries = async () => {
+    try {
+      await refresh();
+      toast.success("Deliveries refreshed");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not refresh deliveries.");
     }
   };
   return (
     <>
       <Heading
-        eyebrow="Restricted workspace"
-        title="Platform administration"
-        subtitle="Manage registered accounts and close inappropriate or unavailable marketplace listings."
+        eyebrow="Rider workspace"
+        title="My deliveries"
+        subtitle="Open an assigned delivery, check pickup and drop-off details, then update each step when it happens."
+        action={
+          <Button variant="secondary" onClick={() => void refreshDeliveries()}>
+            Refresh deliveries
+          </Button>
+        }
       />
-      <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Metric label="Registered accounts" value={`${users.length}`} helper="Appwrite accounts" icon={Users} />
-        <Metric label="Farmers" value={`${state.farmers.length}`} helper="Farmer profiles" icon={Sprout} />
-        <Metric label="Buyers" value={`${state.buyers.length}`} helper="Buyer profiles" icon={Store} />
-        <Metric label="Orders" value={`${state.deals.length}`} helper="All platform orders" icon={ClipboardList} />
+      <div className="mb-5 grid grid-cols-2 gap-3">
+        <Metric label="Active deliveries" value={`${activeDeals.length}`} helper="Assigned to your account" icon={Truck} />
+        <Metric label="Delivered" value={`${deals.length - activeDeals.length}`} helper="Completed deliveries" icon={Package} />
       </div>
-      <Section eyebrow="Accounts" title="Registered users">
-        {users.length ? (
-          <div
-            role="region"
-            aria-label="Registered users"
-            tabIndex={0}
-            className="table-scroll"
-          >
-            <table className="w-full min-w-[560px] text-left">
-              <thead className="table-head">
-                <tr>
-                  {["Name", "Email", "Role", "Status", "Management"].map((item) => (
-                    <th key={item} className="px-4 py-3 font-semibold">{item}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {users.map((user) => (
-                  <tr key={user.id} className="table-row text-xs">
-                    <td className="px-4 py-3.5 font-semibold">{user.name}</td>
-                    <td className="px-4 py-3.5">{user.email}</td>
-                    <td className="px-4 py-3.5 capitalize">{user.role ?? "No profile"}</td>
-                    <td className="px-4 py-3.5">
-                      <span className={`tag ${user.status ? "tag-green" : "tag-amber"}`}>
-                        {user.status ? "enabled" : "disabled"}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3.5">
-                      {user.role && (
-                        <button
-                          className="font-semibold text-[#47744f]"
-                          onClick={() => void changeUserStatus(user.id, !user.status)}
-                        >
-                          {user.status
-                            ? "Disable KhetLink access"
-                            : "Enable KhetLink access"}
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      <Section eyebrow="Assigned to you" title="Delivery tasks">
+        {deals.length ? (
+          <div className="space-y-4">
+            {deals.map((deal) => (
+              <RiderDeliveryCard
+                key={deal.id}
+                deal={deal}
+                updateDeliveryStatus={updateDeliveryStatus}
+              />
+            ))}
           </div>
         ) : (
-          <Empty title="No Appwrite accounts found" body="Registered accounts will appear here." icon={Users} />
+          <Empty
+            icon={Package}
+            title="No deliveries assigned"
+            body="Orders assigned by the KhetLink admin will appear here."
+          />
         )}
       </Section>
-      <div className="mt-5 grid gap-5">
-        <Section eyebrow="Marketplace supply" title="All produce listings">
-          <ListingTable
-            items={state.produce}
-            onClose={(item) => void closeItem("produce", item.id)}
-          />
-        </Section>
-        <Section eyebrow="Marketplace demand" title="All buyer demands">
-          {state.demands.length ? (
-            <div
-              role="region"
-              aria-label="All buyer demands"
-              tabIndex={0}
-              className="table-scroll"
-            >
-              <table className="w-full min-w-[620px] text-left">
-                <thead className="table-head">
-                  <tr>
-                    {["Buyer", "Produce", "Quantity", "Target", "Location", "Status", "Management"].map((item) => (
-                      <th key={item} className="px-4 py-3 font-semibold">{item}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {state.demands.map((demand) => (
-                    <tr key={demand.id} className="table-row text-xs">
-                      <td className="px-4 py-3.5 font-semibold">{demand.buyerName}</td>
-                      <td className="px-4 py-3.5">{demand.produce}</td>
-                      <td className="px-4 py-3.5">{demand.quantityKg} kg</td>
-                      <td className="px-4 py-3.5">{money(demand.targetPricePerKg)}/kg</td>
-                      <td className="px-4 py-3.5">{demand.location}</td>
-                      <td className="px-4 py-3.5"><span className="tag tag-green">{demand.status}</span></td>
-                      <td className="px-4 py-3.5">
-                        {demand.status === "open" && (
-                          <button
-                            className="font-semibold text-[#9b5441]"
-                            onClick={() => void closeItem("demand", demand.id)}
-                          >
-                            Close
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <Empty title="No demands found" body="Buyer demands will appear here." icon={ClipboardList} />
-          )}
-        </Section>
-        <Section eyebrow="All activity" title="Platform orders">
-          {state.deals.length ? (
-            <div
-              role="region"
-              aria-label="Platform orders"
-              tabIndex={0}
-              className="table-scroll"
-            >
-              <table className="w-full min-w-[620px] text-left">
-                <thead className="table-head">
-                  <tr>
-                    {["Produce", "Farmer", "Buyer", "Quantity", "Value", "Status"].map((item) => (
-                      <th key={item} className="px-4 py-3 font-semibold">{item}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {state.deals.map((deal) => (
-                    <tr key={deal.id} className="table-row text-xs">
-                      <td className="px-4 py-3.5 font-semibold">{deal.produce}</td>
-                      <td className="px-4 py-3.5">{deal.farmerName}</td>
-                      <td className="px-4 py-3.5">{deal.buyerName}</td>
-                      <td className="px-4 py-3.5">{deal.quantityKg} kg</td>
-                      <td className="px-4 py-3.5">{money(deal.totalValue)}</td>
-                      <td className="px-4 py-3.5"><span className="tag tag-green">{deal.status}</span></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <Empty title="No orders yet" body="Accepted matches will appear here." icon={Handshake} />
-          )}
-        </Section>
-      </div>
     </>
+  );
+}
+
+function RiderDeliveryCard({
+  deal,
+  updateDeliveryStatus,
+}: {
+  deal: Deal;
+  updateDeliveryStatus: ReturnType<typeof usePlatform>["riderUpdateDeliveryStatus"];
+}) {
+  const [busy, setBusy] = useState(false);
+  const nextStatus =
+    deal.deliveryStatus === "rider_assigned"
+      ? "at_farmer"
+      : deal.deliveryStatus === "at_farmer"
+        ? "delivered"
+        : null;
+  const advance = async () => {
+    if (!nextStatus) return;
+    setBusy(true);
+    try {
+      await updateDeliveryStatus(deal.id, nextStatus);
+      toast.success(
+        nextStatus === "at_farmer"
+          ? "Pickup arrival recorded"
+          : "Delivery marked complete",
+      );
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not update delivery.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <article className="rounded-md border border-[#e5e9e1] bg-[#fbfcf9] p-4 sm:p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold">{deal.produce} · {deal.quantityKg} kg</p>
+          <p className="mt-1 text-xs text-[#788279]">
+            Order for {deal.buyerName} · {money(deal.totalValue)}
+          </p>
+        </div>
+        <span className="tag tag-green">
+          {deal.riderFee == null ? "Rider fee unavailable" : `${money(deal.riderFee)} rider fee`}
+        </span>
+      </div>
+      <div className="mt-4">
+        <DeliveryProgress deal={deal} />
+      </div>
+      <div className="mt-4 grid gap-3 rounded-md bg-white p-3 text-xs sm:grid-cols-2">
+        <Info label="Pickup from farmer" value={`${deal.farmerName} · ${deal.farmerLocation || "Location unavailable"}`} />
+        <Info label="Deliver to buyer" value={`${deal.buyerName} · ${deal.deliveryAddress || "Address unavailable"}`} />
+        <Info label="Route distance" value={deal.distanceKm == null ? "Unavailable" : `${deal.distanceKm} km`} />
+        <Info label="Rate" value={deal.riderRatePerKm == null ? "Unavailable" : `${money(deal.riderRatePerKm)}/km`} />
+      </div>
+      {nextStatus ? (
+        <Button className="mt-4" disabled={busy} onClick={() => void advance()}>
+          {busy
+            ? "Saving…"
+            : nextStatus === "at_farmer"
+              ? "I reached the farmer"
+              : "I delivered to the buyer"}
+        </Button>
+      ) : (
+        <p className="mt-4 text-xs font-semibold text-[#315b3d]">Delivery complete</p>
+      )}
+    </article>
   );
 }
 
@@ -2281,14 +2865,21 @@ export default function PlatformApp({ route }: { route: string }) {
     updateDemand,
     closeProduce,
     closeDemand,
-    adminCloseListing,
-    adminSetUserStatus,
     acceptMatch,
     updateDealStatus,
+    simulatePayment,
+    adminAssignRider,
+    riderUpdateDeliveryStatus,
   } = usePlatform();
   const parts = route.split("/");
   const routeRole: UserRole =
-    parts[0] === "admin" ? "admin" : parts[0] === "buyer" ? "buyer" : "farmer";
+    parts[0] === "admin"
+      ? "admin"
+      : parts[0] === "buyer"
+        ? "buyer"
+        : parts[0] === "rider"
+          ? "rider"
+          : "farmer";
   const name = state.user?.name ?? "Visitor";
   const userId =
     state.user?.role === routeRole
@@ -2297,6 +2888,7 @@ export default function PlatformApp({ route }: { route: string }) {
   const requiresRole =
     route.startsWith("farmer/") ||
     route.startsWith("buyer/") ||
+    route.startsWith("rider/") ||
     route.startsWith("admin/");
 
   useEffect(() => {
@@ -2309,7 +2901,9 @@ export default function PlatformApp({ route }: { route: string }) {
           ? "/admin/dashboard"
           : state.user.role === "buyer"
             ? "/buyer/dashboard"
-            : "/farmer/dashboard",
+            : state.user.role === "rider"
+              ? "/rider/dashboard"
+              : "/farmer/dashboard",
       );
     }
   }, [isReady, loadError, requiresRole, routeRole, router, state.user]);
@@ -2496,6 +3090,21 @@ export default function PlatformApp({ route }: { route: string }) {
         <Matches state={state} role="buyer" id={userId} accept={acceptMatch} />
       </Workspace>
     );
+  if (parts[0] === "buyer" && parts[1] === "payment" && parts[2]) {
+    const deal = state.deals.find(
+      (item) => item.id === parts[2] && item.buyerId === userId,
+    );
+    return (
+      <Workspace
+        route={route}
+        role="buyer"
+        name={name}
+        signOut={signOut}
+      >
+        <DemoPayment deal={deal} pay={simulatePayment} />
+      </Workspace>
+    );
+  }
   if (route === "farmer/orders" || route === "buyer/orders")
     return (
       <Workspace route={route} role={routeRole} name={name} signOut={signOut}>
@@ -2504,6 +3113,7 @@ export default function PlatformApp({ route }: { route: string }) {
           role={route.startsWith("buyer/") ? "buyer" : "farmer"}
           id={userId}
           update={updateDealStatus}
+          refresh={refreshState}
         />
       </Workspace>
     );
@@ -2528,8 +3138,23 @@ export default function PlatformApp({ route }: { route: string }) {
       >
         <AdminDashboard
           state={state}
-          closeListing={adminCloseListing}
-          setUserStatus={adminSetUserStatus}
+          assignRider={adminAssignRider}
+          refresh={refreshState}
+        />
+      </Workspace>
+    );
+  if (route === "rider/dashboard")
+    return (
+      <Workspace
+        route={route}
+        role="rider"
+        name={name}
+        signOut={signOut}
+      >
+        <RiderDashboard
+          deals={state.deals}
+          updateDeliveryStatus={riderUpdateDeliveryStatus}
+          refresh={refreshState}
         />
       </Workspace>
     );

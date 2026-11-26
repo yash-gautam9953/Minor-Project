@@ -1,20 +1,32 @@
 import { Account, Client, Databases, ID, Query } from "node-appwrite";
 import { createHash } from "node:crypto";
 import { findFarmerMatches } from "@/services/matching";
+import { sortNewestFirst } from "@/services/collection-order";
 import type {
   BuyerProfile,
   BuyerType,
+  DeliveryStatus,
+  DemoPaymentMethod,
   Deal,
   DealStatus,
   DemandListing,
   FarmerProfile,
   ListingStatus,
+  PaymentStatus,
   PlatformState,
   ProduceListing,
+  RiderProfile,
   UserProfile,
   UserRole,
 } from "@/types";
 import { calculatePlatformMetrics } from "@/services/platform-metrics";
+import {
+  canViewDemandDeliveryAddress,
+  canViewOrderDeliveryAddress,
+  calculateRiderFee,
+  canRiderAdvanceDelivery,
+  omitDemandDeliveryAddress,
+} from "@/services/delivery";
 
 const collectionNames = [
   "users",
@@ -27,7 +39,10 @@ const collectionNames = [
 ] as const;
 
 type CollectionName = (typeof collectionNames)[number];
-type DocumentRecord = Record<string, unknown> & { $id: string };
+type DocumentRecord = Record<string, unknown> & {
+  $id: string;
+  $createdAt: string;
+};
 type AuthenticatedUser = { $id: string; name: string; email: string };
 
 const collectionEnvironmentNames: Record<CollectionName, string> = {
@@ -153,6 +168,24 @@ function requiredNumber(data: Record<string, unknown>, key: string) {
   return value;
 }
 
+function optionalNumber(data: Record<string, unknown>, key: string) {
+  const value = data[key];
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new PlatformApiError(`An Appwrite order has an invalid ${key} field.`, 500);
+  }
+  return value;
+}
+
+function optionalString(data: Record<string, unknown>, key: string) {
+  const value = data[key];
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string") {
+    throw new PlatformApiError(`An Appwrite document has an invalid ${key} field.`, 500);
+  }
+  return value;
+}
+
 function listingStatus(data: Record<string, unknown>): ListingStatus {
   const status = requiredString(data, "status");
   if (status !== "open" && status !== "matched" && status !== "closed") {
@@ -165,8 +198,8 @@ function toUserProfile(document: DocumentRecord): UserProfile {
   const data = documentFields(document);
   const role = requiredString(data, "role");
   const accountStatus = data.accountStatus ?? "enabled";
-  if (role !== "farmer" && role !== "buyer") {
-    throw new PlatformApiError("This account has no valid farmer or buyer profile.", 403);
+  if (role !== "farmer" && role !== "buyer" && role !== "rider") {
+    throw new PlatformApiError("This account has no valid KhetLink profile.", 403);
   }
   if (accountStatus !== "enabled" && accountStatus !== "disabled") {
     throw new PlatformApiError("This KhetLink account has an invalid status.", 500);
@@ -234,6 +267,7 @@ function toProduceListing(document: DocumentRecord): ProduceListing {
 function toDemandListing(document: DocumentRecord): DemandListing {
   const data = documentFields(document);
   const buyerType = requiredString(data, "buyerType");
+  const deliveryAddress = optionalString(data, "deliveryAddress");
   if (
     buyerType !== "Retailer" &&
     buyerType !== "Restaurant" &&
@@ -251,6 +285,7 @@ function toDemandListing(document: DocumentRecord): DemandListing {
     quantityKg: requiredNumber(data, "quantityKg"),
     targetPricePerKg: requiredNumber(data, "targetPricePerKg"),
     location: requiredString(data, "location"),
+    ...(deliveryAddress === null ? {} : { deliveryAddress }),
     requiredBy: requiredString(data, "requiredBy"),
     status: listingStatus(data),
   };
@@ -262,18 +297,57 @@ function toDeal(document: DocumentRecord): Deal {
   if (status !== "pending" && status !== "confirmed" && status !== "completed") {
     throw new PlatformApiError("An Appwrite order has an invalid status.", 500);
   }
+  const rawPaymentStatus = data.paymentStatus ?? "unpaid";
+  if (rawPaymentStatus !== "unpaid" && rawPaymentStatus !== "simulated_paid") {
+    throw new PlatformApiError("An Appwrite order has an invalid paymentStatus field.", 500);
+  }
+  const paymentStatus: PaymentStatus = rawPaymentStatus;
+  const rawMethod = optionalString(data, "demoPaymentMethod");
+  if (
+    rawMethod !== null &&
+    rawMethod !== "upi" &&
+    rawMethod !== "card" &&
+    rawMethod !== "bank"
+  ) {
+    throw new PlatformApiError("An Appwrite order has an invalid demoPaymentMethod field.", 500);
+  }
+  const defaultDeliveryStatus =
+    paymentStatus === "simulated_paid" ? "awaiting_assignment" : "awaiting_payment";
+  const rawDeliveryStatus = data.deliveryStatus ?? defaultDeliveryStatus;
+  if (
+    rawDeliveryStatus !== "awaiting_payment" &&
+    rawDeliveryStatus !== "awaiting_assignment" &&
+    rawDeliveryStatus !== "rider_assigned" &&
+    rawDeliveryStatus !== "at_farmer" &&
+    rawDeliveryStatus !== "delivered"
+  ) {
+    throw new PlatformApiError("An Appwrite order has an invalid deliveryStatus field.", 500);
+  }
+  const deliveryStatus: DeliveryStatus = rawDeliveryStatus;
   return {
     id: document.$id,
     farmerId: requiredString(data, "farmerId"),
     farmerName: requiredString(data, "farmerName"),
+    farmerLocation: optionalString(data, "farmerLocation"),
     buyerId: requiredString(data, "buyerId"),
     buyerName: requiredString(data, "buyerName"),
+    deliveryAddress: optionalString(data, "deliveryAddress"),
     produce: requiredString(data, "produce"),
     quantityKg: requiredNumber(data, "quantityKg"),
     agreedPricePerKg: requiredNumber(data, "agreedPricePerKg"),
     totalValue: requiredNumber(data, "totalValue"),
     status,
     createdAt: requiredString(data, "createdAt"),
+    paymentStatus,
+    demoPaymentMethod: rawMethod,
+    paymentSimulatedAt: optionalString(data, "paymentSimulatedAt"),
+    deliveryStatus,
+    riderId: optionalString(data, "riderId"),
+    riderName: optionalString(data, "riderName"),
+    distanceKm: optionalNumber(data, "distanceKm"),
+    riderRatePerKm: optionalNumber(data, "riderRatePerKm"),
+    riderFee: optionalNumber(data, "riderFee"),
+    deliveryUpdatedAt: optionalString(data, "deliveryUpdatedAt"),
   };
 }
 
@@ -309,7 +383,7 @@ async function listDocuments(name: CollectionName) {
     );
     const rows = page.documents as unknown as DocumentRecord[];
     documents.push(...rows);
-    if (rows.length < 100) return documents;
+    if (rows.length < 100) return sortNewestFirst(documents);
     cursor = rows[rows.length - 1].$id;
   }
 
@@ -334,7 +408,7 @@ async function getProfile(userId: string) {
     if (error instanceof PlatformApiError) throw error;
     if (errorCode(error) === 404) {
       throw new PlatformApiError(
-        "Your KhetLink profile is missing. Please register this account again.",
+        "Your KhetLink profile is missing. Use Create an account with this same email to finish setting up your profile.",
         403,
       );
     }
@@ -379,6 +453,23 @@ async function loadState(
   const allProduce = produceDocuments.map(toProduceListing);
   const allDemands = demandDocuments.map(toDemandListing);
   const allDeals = dealDocuments.map(toDeal);
+  const allRiders: RiderProfile[] = adminAccount
+    ? userDocuments.flatMap((document) => {
+        const data = documentFields(document);
+        const accountStatus = data.accountStatus ?? "enabled";
+        if (accountStatus !== "enabled" && accountStatus !== "disabled") {
+          throw new PlatformApiError("A KhetLink account has an invalid status.", 500);
+        }
+        if (requiredString(data, "role") !== "rider" || accountStatus === "disabled") {
+          return [];
+        }
+        return [{
+          id: document.$id,
+          name: requiredString(data, "name"),
+          location: requiredString(data, "location"),
+        }];
+      })
+    : [];
   const metrics = calculatePlatformMetrics({
     farmers: allFarmers,
     buyers: allBuyers,
@@ -390,47 +481,40 @@ async function loadState(
 
   return {
     user: profile,
-    farmers: userId ? allFarmers : [],
-    buyers: userId ? allBuyers : [],
-    produce: allProduce
-      .filter(
-        (listing) =>
-          Boolean(userId) || (listing.status === "open" && listing.quantityKg > 0),
-      ),
+    farmers:
+      userId && !adminAccount && profile?.role !== "rider" ? allFarmers : [],
+    buyers:
+      userId && !adminAccount && profile?.role !== "rider" ? allBuyers : [],
+    riders: allRiders,
+    produce: adminAccount || profile?.role === "rider"
+      ? []
+      : allProduce.filter(
+          (listing) =>
+            Boolean(userId) || (listing.status === "open" && listing.quantityKg > 0),
+        ),
     demands: allDemands
-      .filter(
-        (demand) =>
-          Boolean(userId) || (demand.status === "open" && demand.quantityKg > 0),
+      .filter((demand) =>
+        !adminAccount &&
+        profile?.role !== "rider" &&
+        (Boolean(userId) || (demand.status === "open" && demand.quantityKg > 0)),
+      )
+      .map((demand) =>
+        canViewDemandDeliveryAddress(demand, profile?.role ?? null, userId)
+          ? demand
+          : omitDemandDeliveryAddress(demand),
       ),
     deals: allDeals.filter(
       (deal) =>
         Boolean(adminAccount) ||
         deal.farmerId === userId ||
-        deal.buyerId === userId,
+        deal.buyerId === userId ||
+        (profile?.role === "rider" && deal.riderId === userId),
+    ).map((deal) =>
+      canViewOrderDeliveryAddress(deal, profile?.role ?? null, userId)
+        ? deal
+        : { ...deal, deliveryAddress: null },
     ),
     metrics,
-    ...(adminAccount
-      ? {
-          adminUsers: userDocuments.map((document) => {
-            const data = documentFields(document);
-            const role = requiredString(data, "role");
-            const accountStatus = data.accountStatus ?? "enabled";
-            if (accountStatus !== "enabled" && accountStatus !== "disabled") {
-              throw new PlatformApiError(
-                "A KhetLink account has an invalid status.",
-                500,
-              );
-            }
-            return {
-              id: document.$id,
-              name: requiredString(data, "name"),
-              email: requiredString(data, "email"),
-              status: accountStatus === "enabled",
-              role: role === "farmer" || role === "buyer" ? role : undefined,
-            };
-          }),
-        }
-      : {}),
   };
 }
 
@@ -523,6 +607,13 @@ function assertBuyerType(value: unknown): BuyerType {
   return value;
 }
 
+function assertDemoPaymentMethod(value: unknown): DemoPaymentMethod {
+  if (value !== "upi" && value !== "card" && value !== "bank") {
+    throw new PlatformApiError("Choose a supported demo payment method.", 400);
+  }
+  return value;
+}
+
 async function createProfile(
   user: AuthenticatedUser,
   role: UserRole,
@@ -530,8 +621,8 @@ async function createProfile(
   submittedLocation: unknown,
   submittedBuyerType: unknown,
 ) {
-  if (role !== "farmer" && role !== "buyer") {
-    throw new PlatformApiError("New accounts must be farmers or buyers.", 400);
+  if (role !== "farmer" && role !== "buyer" && role !== "rider") {
+    throw new PlatformApiError("Choose a farmer, buyer, or rider account.", 400);
   }
   const { databases, databaseId } = getDatabases();
   try {
@@ -575,7 +666,7 @@ async function createProfile(
         },
         transactionId,
       });
-    } else {
+    } else if (role === "buyer") {
       await databases.createDocument({
         databaseId,
         collectionId: getCollectionId("buyers"),
@@ -632,6 +723,7 @@ async function postDemand(user: UserProfile, body: Record<string, unknown>) {
     quantityKg: positiveNumber(body.quantityKg, "Quantity"),
     targetPricePerKg: positiveNumber(body.targetPricePerKg, "Target price"),
     location: assertLocation(body.location),
+    deliveryAddress: stringValue(body.deliveryAddress, "Delivery address", 512),
     requiredBy: validDate(body.requiredBy, "Required date"),
     status: "open",
   };
@@ -665,6 +757,7 @@ function listingValues(
   date: string;
   targetPricePerKg: number;
   buyerType: BuyerType;
+  deliveryAddress: string;
   requiredBy: string;
 };
 function listingValues(body: Record<string, unknown>, role: "farmer" | "buyer") {
@@ -684,6 +777,7 @@ function listingValues(body: Record<string, unknown>, role: "farmer" | "buyer") 
         ...values,
         targetPricePerKg: positiveNumber(body.price, "Target price"),
         buyerType: assertBuyerType(body.buyerType),
+        deliveryAddress: stringValue(body.deliveryAddress, "Delivery address", 512),
         requiredBy: values.date,
       };
 }
@@ -742,6 +836,7 @@ async function updateOwnListing(
         location: values.location,
         targetPricePerKg: values.targetPricePerKg,
         buyerType: values.buyerType,
+        deliveryAddress: values.deliveryAddress,
         requiredBy: values.requiredBy,
       };
     }
@@ -821,6 +916,12 @@ async function acceptMatch(
       throw new PlatformApiError("You can only accept a match involving your own demand or listing.", 403);
     }
     const match = findFarmerMatches(demand, [produce])[0];
+    if (!demand.deliveryAddress) {
+      throw new PlatformApiError(
+        "Add a delivery address to this demand before accepting the match.",
+        409,
+      );
+    }
     if (
       demand.status !== "open" ||
       produce.status !== "open" ||
@@ -838,8 +939,10 @@ async function acceptMatch(
     const deal: Omit<Deal, "id"> = {
       farmerId: produce.farmerId,
       farmerName: produce.farmerName,
+      farmerLocation: produce.location,
       buyerId: demand.buyerId,
       buyerName: demand.buyerName,
+      deliveryAddress: demand.deliveryAddress,
       produce: produce.produce,
       quantityKg,
       agreedPricePerKg: produce.askingPricePerKg,
@@ -908,8 +1011,24 @@ async function updateDealStatus(
   await withTransaction(async (transactionId) => {
     const dealDocument = await getDocument("orders", dealId, transactionId);
     const deal = toDeal(dealDocument);
+    if (user.role !== "farmer" && user.role !== "buyer") {
+      throw new PlatformApiError("Only the farmer or buyer can update a deal.", 403);
+    }
     if (deal.farmerId !== user.id && deal.buyerId !== user.id) {
       throw new PlatformApiError("You can only update your own deals.", 403);
+    }
+    if (status === "completed" && user.role !== "buyer") {
+      throw new PlatformApiError("The buyer confirms an order after delivery.", 403);
+    }
+    if (
+      status === "completed" &&
+      deal.paymentStatus === "simulated_paid" &&
+      deal.deliveryStatus !== "delivered"
+    ) {
+      throw new PlatformApiError(
+        "The buyer can complete this order after the rider marks it delivered.",
+        409,
+      );
     }
     if (
       (status === "confirmed" && deal.status !== "pending") ||
@@ -928,66 +1047,135 @@ async function updateDealStatus(
   return loadState(user.id);
 }
 
+async function simulatePayment(
+  user: UserProfile,
+  body: Record<string, unknown>,
+) {
+  if (user.role !== "buyer") {
+    throw new PlatformApiError("Only the buyer can start the payment demonstration.", 403);
+  }
+  const dealId = stringValue(body.dealId, "Order ID", 36);
+  const method = assertDemoPaymentMethod(body.method);
+  const paidAt = new Date().toISOString();
+  const { databases, databaseId } = getDatabases();
+
+  await withTransaction(async (transactionId) => {
+    const document = await getDocument("orders", dealId, transactionId);
+    const deal = toDeal(document);
+    if (deal.buyerId !== user.id) {
+      throw new PlatformApiError("You can only pay for your own orders.", 403);
+    }
+    if (deal.status === "pending") {
+      throw new PlatformApiError("Confirm the deal before opening payment.", 409);
+    }
+    if (deal.paymentStatus !== "unpaid") {
+      throw new PlatformApiError("This order's demo payment is already recorded.", 409);
+    }
+    await databases.updateDocument({
+      databaseId,
+      collectionId: getCollectionId("orders"),
+      documentId: dealId,
+      data: {
+        paymentStatus: "simulated_paid",
+        demoPaymentMethod: method,
+        paymentSimulatedAt: paidAt,
+        deliveryStatus: "awaiting_assignment",
+        deliveryUpdatedAt: paidAt,
+      },
+      transactionId,
+    });
+  });
+  return loadState(user.id);
+}
+
+async function adminAssignRider(body: Record<string, unknown>) {
+  const dealId = stringValue(body.dealId, "Order ID", 36);
+  const riderId = stringValue(body.riderId, "Rider account", 36);
+  const distanceKm = positiveNumber(body.distanceKm, "Route distance");
+  const ratePerKm = positiveNumber(body.ratePerKm, "Rider fee per kilometre");
+  if (distanceKm > 5_000 || ratePerKm > 100_000) {
+    throw new PlatformApiError("Enter a valid route distance and rider rate.", 400);
+  }
+  const updatedAt = new Date().toISOString();
+  const { databases, databaseId } = getDatabases();
+  const rider = await getProfile(riderId);
+  if (rider.role !== "rider") {
+    throw new PlatformApiError("Choose a registered rider account.", 400);
+  }
+
+  await withTransaction(async (transactionId) => {
+    const document = await getDocument("orders", dealId, transactionId);
+    const deal = toDeal(document);
+    if (deal.paymentStatus !== "simulated_paid") {
+      throw new PlatformApiError("Only paid demo orders can be assigned for delivery.", 409);
+    }
+    if (!deal.deliveryAddress?.trim()) {
+      throw new PlatformApiError("This order has no delivery address and cannot be assigned.", 409);
+    }
+    if (deal.deliveryStatus !== "awaiting_assignment") {
+      throw new PlatformApiError("A rider can only be assigned once to a delivery request.", 409);
+    }
+    await databases.updateDocument({
+      databaseId,
+      collectionId: getCollectionId("orders"),
+      documentId: dealId,
+      data: {
+        riderId: rider.id,
+        riderName: rider.name,
+        distanceKm,
+        riderRatePerKm: ratePerKm,
+        riderFee: calculateRiderFee(distanceKm, ratePerKm),
+        deliveryStatus: "rider_assigned",
+        deliveryUpdatedAt: updatedAt,
+      },
+      transactionId,
+    });
+  });
+}
+
+async function riderUpdateDeliveryStatus(
+  user: UserProfile,
+  body: Record<string, unknown>,
+): Promise<PlatformState> {
+  if (user.role !== "rider") {
+    throw new PlatformApiError("Only the assigned rider can update delivery progress.", 403);
+  }
+  const dealId = stringValue(body.dealId, "Order ID", 36);
+  const status = body.status;
+  if (status !== "at_farmer" && status !== "delivered") {
+    throw new PlatformApiError("Choose a valid delivery progress status.", 400);
+  }
+  const updatedAt = new Date().toISOString();
+  const { databases, databaseId } = getDatabases();
+
+  await withTransaction(async (transactionId) => {
+    const document = await getDocument("orders", dealId, transactionId);
+    const deal = toDeal(document);
+    if (deal.riderId !== user.id) {
+      throw new PlatformApiError("Only the assigned rider can update this delivery.", 403);
+    }
+    if (!canRiderAdvanceDelivery(deal, user.id, status)) {
+      throw new PlatformApiError(
+        "Delivery progress must follow the assigned route steps.",
+        409,
+      );
+    }
+    await databases.updateDocument({
+      databaseId,
+      collectionId: getCollectionId("orders"),
+      documentId: dealId,
+      data: { deliveryStatus: status, deliveryUpdatedAt: updatedAt },
+      transactionId,
+    });
+  });
+  return loadState(user.id);
+}
+
 function isAdminAccount(userId: string) {
   const configuredIds = process.env.APPWRITE_ADMIN_USER_IDS?.split(",")
     .map((id) => id.trim())
     .filter(Boolean);
   return configuredIds?.includes(userId) ?? false;
-}
-
-async function adminCloseListing(body: Record<string, unknown>) {
-  const kind = body.kind;
-  if (kind !== "produce" && kind !== "demand") {
-    throw new PlatformApiError("Choose a valid listing type.", 400);
-  }
-  const documentId = stringValue(body.documentId, "Listing ID", 36);
-  const collection: CollectionName = kind === "produce" ? "produce" : "demands";
-  const { databases, databaseId } = getDatabases();
-  await withTransaction(async (transactionId) => {
-    const document = await getDocument(collection, documentId, transactionId);
-    const status = listingStatus(documentFields(document));
-    if (status !== "open") {
-      throw new PlatformApiError("Only open listings can be closed.", 409);
-    }
-    await databases.updateDocument({
-      databaseId,
-      collectionId: getCollectionId(collection),
-      documentId,
-      data: { status: "closed" },
-      transactionId,
-    });
-  });
-}
-
-async function adminSetUserStatus(body: Record<string, unknown>) {
-  const userId = stringValue(body.userId, "User ID", 36);
-  if (typeof body.status !== "boolean") {
-    throw new PlatformApiError("Choose whether the account should be enabled.", 400);
-  }
-  if (isAdminAccount(userId)) {
-    throw new PlatformApiError("Admin accounts cannot be disabled here.", 403);
-  }
-  const profile = await getDocument("users", userId);
-  const role = requiredString(documentFields(profile), "role");
-  if (role !== "farmer" && role !== "buyer") {
-    throw new PlatformApiError("Only registered farmer or buyer accounts can be managed.", 403);
-  }
-  const { databases, databaseId } = getDatabases();
-  await withTransaction(async (transactionId) => {
-    const currentProfile = await getDocument("users", userId, transactionId);
-    const fields = documentFields(currentProfile);
-    const currentRole = requiredString(fields, "role");
-    if (currentRole !== "farmer" && currentRole !== "buyer") {
-      throw new PlatformApiError("Only registered farmer or buyer accounts can be managed.", 403);
-    }
-    await databases.updateDocument({
-      databaseId,
-      collectionId: getCollectionId("users"),
-      documentId: userId,
-      data: { accountStatus: body.status ? "enabled" : "disabled" },
-      transactionId,
-    });
-  });
 }
 
 export async function getPlatformState(request: Request) {
@@ -1006,22 +1194,15 @@ export async function handlePlatformAction(
     throw new PlatformApiError("Sign in to continue.", 401);
   }
   if (isAdminAccount(account.$id)) {
-    if (
-      body.action !== "adminCloseListing" &&
-      body.action !== "adminSetUserStatus"
-    ) {
-      throw new PlatformApiError("Admins can only use admin management actions.", 403);
+    if (body.action !== "adminAssignRider") {
+      throw new PlatformApiError("Admins can only review orders and assign riders.", 403);
     }
-    if (body.action === "adminCloseListing") {
-      await adminCloseListing(body);
-    } else {
-      await adminSetUserStatus(body);
-    }
+    await adminAssignRider(body);
     return loadState(account.$id, account);
   }
   if (body.action === "createProfile") {
-    if (body.role !== "farmer" && body.role !== "buyer") {
-      throw new PlatformApiError("New accounts must be farmers or buyers.", 400);
+    if (body.role !== "farmer" && body.role !== "buyer" && body.role !== "rider") {
+      throw new PlatformApiError("Choose a farmer, buyer, or rider account.", 400);
     }
     return createProfile(
       account,
@@ -1050,9 +1231,10 @@ export async function handlePlatformAction(
       return acceptMatch(user, body);
     case "updateDealStatus":
       return updateDealStatus(user, body);
-    case "adminCloseListing":
-    case "adminSetUserStatus":
-      throw new PlatformApiError("Admin access is required for this action.", 403);
+    case "simulatePayment":
+      return simulatePayment(user, body);
+    case "riderUpdateDeliveryStatus":
+      return riderUpdateDeliveryStatus(user, body);
     default:
       throw new PlatformApiError("Unknown platform action.", 400);
   }
