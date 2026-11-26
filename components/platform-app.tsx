@@ -240,6 +240,7 @@ function Workspace({
         : role === "rider"
           ? riderNav
           : farmerNav;
+  const exploreLinks = role === "admin" ? commonNav : [];
   const sideLink = ([label, href, Icon]: readonly [
     string,
     string,
@@ -281,10 +282,14 @@ function Workspace({
         <nav aria-label="Workspace navigation" className="space-y-1">
           {links.map(sideLink)}
         </nav>
-        <p className="side-section">Explore</p>
-        <nav aria-label="Explore navigation" className="space-y-1">
-          {commonNav.map(sideLink)}
-        </nav>
+        {exploreLinks.length > 0 && (
+          <>
+            <p className="side-section">Explore</p>
+            <nav aria-label="Explore navigation" className="space-y-1">
+              {exploreLinks.map(sideLink)}
+            </nav>
+          </>
+        )}
         <div className="mt-auto rounded-lg border border-white/10 bg-white/[.045] p-3">
           <div className="flex items-center gap-2.5">
             <span className="grid size-8 place-items-center rounded-full bg-[#d6ed8a] text-xs font-bold text-[#234b35]">
@@ -353,7 +358,7 @@ function Workspace({
           </div>
         </header>
         <nav aria-label="Workspace navigation" className="mobile-nav">
-          {[...links, ...commonNav].map(
+          {[...links, ...exploreLinks].map(
             ([label, href]) => (
               <Link
                 key={href}
